@@ -736,8 +736,18 @@ def run_check(logger, dash_status):
         return
 
     # 2. Search for slots.
+    now = datetime.now()
+    offset_days = config.get("search_start_offset_days", 0)
+    try:
+        offset_days = max(0, int(offset_days))
+    except (ValueError, TypeError):
+        offset_days = 0
+
+    start_dt = now + timedelta(days=offset_days)
+    api_start_date = start_dt.strftime("%Y-%m-%d")
+
     payload = {
-        "startDate": datetime.now().strftime("%Y-%m-%d"),
+        "startDate": api_start_date,
         "organizationId": build_search_organization_ids(config),
         "category": config["category"],
         "profileNumber": config["profile_number"],
@@ -781,12 +791,11 @@ def run_check(logger, dash_status):
 
     save_json(SESSION_FILE, session)
 
-    max_date = datetime.now() + timedelta(days=MAX_DAYS_AHEAD)
+    max_date = now + timedelta(days=MAX_DAYS_AHEAD)
+    min_date = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
     wanted_types = set(config["exam_types"])
     watch_ids = set(config["organization_ids"])
-    # Hour-of-day preference (wizard's dual-handle slider) — [earliest, latest)
-    # against dt.hour, so a config predating this feature (both keys absent)
-    # defaults to the full day and filters nothing.
     earliest_hour = config.get("earliest_slot_hour", 0)
     latest_hour = config.get("latest_slot_hour", 24)
     hits = []
@@ -801,7 +810,7 @@ def run_check(logger, dash_status):
             if not dt_str:
                 continue
             dt = datetime.fromisoformat(dt_str)
-            if dt <= max_date and earliest_hour <= dt.hour < latest_hour:
+            if min_date <= dt <= max_date and earliest_hour <= dt.hour < latest_hour:
                 places = exam.get("placeTheoryAmount") or exam.get("placePracticeAmount")
                 hits.append((word.get("wordName"), exam_type, dt, places))
 

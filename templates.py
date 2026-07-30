@@ -649,6 +649,16 @@ WIZARD_PAGE = """<!doctype html>
 
       <div class="divider"></div>
 
+      <div class="freq-head" style="margin-top:1rem;">
+        <label for="search_start_offset_slider">Search start date delay (optional)</label>
+        <span class="freq-value" id="search-start-offset-label">Today (+0 days)</span>
+      </div>
+      <input type="range" id="search_start_offset_slider" min="0" max="30" step="1" value="0">
+      <input type="hidden" id="search_start_offset_days" value="0">
+      <div class="hint" id="search-start-offset-hint" style="margin-top:-0.35rem;">Searches for slots starting from today up to 31 days out (site limit).</div>
+
+      <div class="divider"></div>
+
       <div class="toggle-row">
         <div class="toggle-text">
           <div class="tt-title">Send a phone alert when a slot beats your booked date</div>
@@ -996,6 +1006,35 @@ function setPollIntervalSeconds(seconds) {
 pollSlider.addEventListener('input', updatePollIntervalDisplay);
 updatePollIntervalDisplay();
 
+// ---- search start date offset slider ----
+const searchOffsetSlider = document.getElementById('search_start_offset_slider');
+const searchOffsetHidden = document.getElementById('search_start_offset_days');
+const searchOffsetLabel = document.getElementById('search-start-offset-label');
+const searchOffsetHint = document.getElementById('search-start-offset-hint');
+
+function updateSearchOffsetDisplay() {
+  const days = parseInt(searchOffsetSlider.value, 10) || 0;
+  searchOffsetHidden.value = days;
+
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + days);
+
+  const yyyy = targetDate.getFullYear();
+  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(targetDate.getDate()).padStart(2, '0');
+  const formattedDate = `${yyyy}-${mm}-${dd}`;
+
+  if (days === 0) {
+    searchOffsetLabel.textContent = 'Today (+0 days)';
+    searchOffsetHint.textContent = `Searches for slots starting from today (${formattedDate}) up to 31 days out (site limit).`;
+  } else {
+    searchOffsetLabel.textContent = `+${days} day${days > 1 ? 's' : ''} (${formattedDate})`;
+    searchOffsetHint.textContent = `Searches for slots starting from ${formattedDate} (Today + ${days} day${days > 1 ? 's' : ''}) up to 31 days out from today.`;
+  }
+}
+
+searchOffsetSlider.addEventListener('input', updateSearchOffsetDisplay);
+
 // ---- preferred time-of-day dual-handle slider ----
 // Two overlapping native range inputs (0-24, hour granularity) rather than a
 // single custom-built slider: input[type=range]'s own track/background is
@@ -1251,6 +1290,14 @@ if (EXISTING_CONFIG) {
 
   // Nothing to reset on a fresh /setup with no saved config yet.
   document.getElementById('reset-account-block').style.display = 'block';
+
+  if (typeof EXISTING_CONFIG.search_start_offset_days !== 'undefined') {
+    const val = parseInt(EXISTING_CONFIG.search_start_offset_days, 10) || 0;
+    searchOffsetSlider.value = Math.max(0, Math.min(30, val));
+  } else {
+    searchOffsetSlider.value = 0;
+  }
+  updateSearchOffsetDisplay();
 }
 
 document.getElementById('copy-ntfy').addEventListener('click', () => {
@@ -1322,6 +1369,7 @@ document.getElementById('form').addEventListener('submit', async (e) => {
       category: category,
       exam_types: examTypes,
       current_slot_date: currentSlotDate,
+      search_start_offset_days: parseInt(searchOffsetHidden.value, 10) || 0,
       poll_interval_seconds: parseInt(document.getElementById('poll_interval_seconds').value, 10),
       earliest_slot_hour: parseInt(timeFromHidden.value, 10),
       latest_slot_hour: parseInt(timeToHidden.value, 10),

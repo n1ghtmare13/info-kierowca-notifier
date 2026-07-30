@@ -8,6 +8,7 @@ Composes notifier.py (poll loop), dashboard_server.py (status page), and
 auto_refresh_session.py (Chrome/QR login) rather than reimplementing any of
 them — see each module's own docstring for what it does on its own.
 """
+
 import http.server
 import json
 import os
@@ -100,7 +101,9 @@ def check_session_valid():
     if not notifier.SESSION_FILE.exists():
         return False
     session = notifier.load_json(notifier.SESSION_FILE)
-    status, _body, _headers = notifier.do_request(notifier.REFRESH_URL, session, method="GET")
+    status, _body, _headers = notifier.do_request(
+        notifier.REFRESH_URL, session, method="GET"
+    )
     if status == 204:
         notifier.save_json(notifier.SESSION_FILE, session)
         return True
@@ -128,7 +131,10 @@ def _wait_for_relogin_and_wake(prior_captured_at, wake_event):
     while time.time() < deadline:
         if notifier.SESSION_FILE.exists():
             try:
-                if notifier.load_json(notifier.SESSION_FILE).get("captured_at") != prior_captured_at:
+                if (
+                    notifier.load_json(notifier.SESSION_FILE).get("captured_at")
+                    != prior_captured_at
+                ):
                     break
             except Exception:
                 pass
@@ -140,6 +146,7 @@ def _wait_for_relogin_and_wake(prior_captured_at, wake_event):
 
 def build_config(payload):
     """Validate a /setup POST body and assemble it into config.json's schema."""
+
     def require_str(key, label):
         val = payload.get(key)
         if not isinstance(val, str) or not val.strip():
@@ -166,7 +173,11 @@ def build_config(payload):
         )
 
     exam_types = payload.get("exam_types")
-    if not isinstance(exam_types, list) or not exam_types or not set(exam_types) <= set(EXAM_TYPE_CHOICES):
+    if (
+        not isinstance(exam_types, list)
+        or not exam_types
+        or not set(exam_types) <= set(EXAM_TYPE_CHOICES)
+    ):
         raise ValueError("Pick at least one exam type")
 
     try:
@@ -180,7 +191,11 @@ def build_config(payload):
         )
     except (TypeError, ValueError):
         raise ValueError("Check frequency must be a number")
-    if not notifier.MIN_POLL_INTERVAL_SECONDS <= poll_interval_seconds <= notifier.MAX_POLL_INTERVAL_SECONDS:
+    if (
+        not notifier.MIN_POLL_INTERVAL_SECONDS
+        <= poll_interval_seconds
+        <= notifier.MAX_POLL_INTERVAL_SECONDS
+    ):
         raise ValueError(
             f"Check frequency must be between {notifier.MIN_POLL_INTERVAL_SECONDS} and "
             f"{notifier.MAX_POLL_INTERVAL_SECONDS} seconds"
@@ -192,7 +207,9 @@ def build_config(payload):
     except (TypeError, ValueError):
         raise ValueError("Preferred time window must be numbers")
     if not (0 <= earliest_slot_hour < latest_slot_hour <= 24):
-        raise ValueError("Preferred time window must be a valid range between 00:00 and 24:00")
+        raise ValueError(
+            "Preferred time window must be a valid range between 00:00 and 24:00"
+        )
 
     current_slot_date = require_str("current_slot_date", "Current slot date")
     # Must be ISO: notifier.is_urgent() feeds this straight to
@@ -232,6 +249,12 @@ def build_config(payload):
     config["auto_confirm_reschedule"] = auto_select_slot and bool(
         payload.get("auto_confirm_reschedule", False)
     )
+    search_start_offset_days = payload.get("search_start_offset_days", 0)
+    try:
+        search_start_offset_days = max(0, min(30, int(search_start_offset_days)))
+    except (ValueError, TypeError):
+        search_start_offset_days = 0
+    config["search_start_offset_days"] = search_start_offset_days
     return config
 
 
@@ -259,7 +282,13 @@ def build_pkk_prefill():
         category_id = pkk_category_id(p["categoryName"])
         if category_id is None:
             continue
-        prefill.append({"pkkNumber": p["pkkNumber"], "categoryId": category_id, "categoryCode": p["categoryName"]})
+        prefill.append(
+            {
+                "pkkNumber": p["pkkNumber"],
+                "categoryId": category_id,
+                "categoryCode": p["categoryName"],
+            }
+        )
     return prefill
 
 
@@ -269,13 +298,20 @@ def render_wizard(existing_config=None, pkk_profiles=None):
     page = page.replace("__CENTER_COUNT__", str(len(WORD_CENTERS)))
     categories_json = json.dumps(CATEGORIES, ensure_ascii=False).replace("</", "<\\/")
     page = page.replace("__CATEGORIES_JSON__", categories_json)
-    pkk_profiles_json = json.dumps(pkk_profiles or [], ensure_ascii=False).replace("</", "<\\/")
+    pkk_profiles_json = json.dumps(pkk_profiles or [], ensure_ascii=False).replace(
+        "</", "<\\/"
+    )
     page = page.replace("__PKK_PROFILES_JSON__", pkk_profiles_json)
-    ntfy_topic = existing_config["ntfy_topic"] if existing_config else "ik-" + secrets.token_urlsafe(24)
+    ntfy_topic = (
+        existing_config["ntfy_topic"]
+        if existing_config
+        else "ik-" + secrets.token_urlsafe(24)
+    )
     page = page.replace("__NTFY_TOPIC__", ntfy_topic)
     existing_json = (
         json.dumps(existing_config, ensure_ascii=False).replace("</", "<\\/")
-        if existing_config else "null"
+        if existing_config
+        else "null"
     )
     page = page.replace("__EXISTING_CONFIG_JSON__", existing_json)
     return page.encode("utf-8")
@@ -316,11 +352,18 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
     def _reply_outcome(self, outcome, messages, default="Done."):
         """Send the standard {ok, action, message} reply for a trigger_*
         outcome. `messages` is keyed on notifier's TRIGGER_* constants."""
-        self._send_json(200, {"ok": True, "action": outcome, "message": messages.get(outcome, default)})
+        self._send_json(
+            200,
+            {"ok": True, "action": outcome, "message": messages.get(outcome, default)},
+        )
 
     @staticmethod
     def _load_config_or_empty():
-        return notifier.load_json(notifier.CONFIG_FILE) if notifier.CONFIG_FILE.exists() else {}
+        return (
+            notifier.load_json(notifier.CONFIG_FILE)
+            if notifier.CONFIG_FILE.exists()
+            else {}
+        )
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
@@ -343,12 +386,19 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             else:
                 self._send(200, render_wizard())
         elif self.path == "/login-status":
-            self._send_json(200, {
-                "ready": notifier.SESSION_FILE.exists(),
-                "in_progress": notifier.auto_refresh_in_progress(),
-            })
+            self._send_json(
+                200,
+                {
+                    "ready": notifier.SESSION_FILE.exists(),
+                    "in_progress": notifier.auto_refresh_in_progress(),
+                },
+            )
         elif self.path == "/status.json":
-            data = notifier.STATUS_FILE.read_bytes() if notifier.STATUS_FILE.exists() else dashboard_server.EMPTY_STATUS
+            data = (
+                notifier.STATUS_FILE.read_bytes()
+                if notifier.STATUS_FILE.exists()
+                else dashboard_server.EMPTY_STATUS
+            )
             self._send(200, data, "application/json")
         else:
             self._send(404, b"not found", "text/plain")
@@ -399,14 +449,16 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         """
         config = self._load_config_or_empty()
         if check_session_valid():
-            outcome = notifier.trigger_open_browser(AppHandler.logger, config, auto_click=False)
+            outcome = notifier.trigger_open_browser(
+                AppHandler.logger, config, auto_click=False
+            )
             messages = {
                 notifier.TRIGGER_LAUNCHED: "Session looks valid — opening a logged-in browser tab.",
                 notifier.TRIGGER_ALREADY_RUNNING: "A logged-in browser tab is already open.",
                 notifier.TRIGGER_DISABLED: "Session looks valid, but auto_open_browser is turned off in Settings.",
                 notifier.TRIGGER_LAUNCH_FAILED: "Session looks valid, but the browser failed to launch — check the log.",
                 notifier.TRIGGER_NO_BROWSER: "Session looks valid, but no Chrome, Edge, or other "
-                    "Chromium-based browser was found on this machine — install one to continue.",
+                "Chromium-based browser was found on this machine — install one to continue.",
             }
         else:
             outcome = notifier.trigger_auto_refresh(
@@ -417,7 +469,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
                 notifier.TRIGGER_DISABLED: "Session looks expired, but auto_refresh_chrome is turned off in Settings.",
                 notifier.TRIGGER_LAUNCH_FAILED: "Session looks expired, but Chrome failed to launch — check the log.",
                 notifier.TRIGGER_NO_BROWSER: "Session looks expired, but no Chrome, Edge, or other "
-                    "Chromium-based browser was found on this machine — install one to continue.",
+                "Chromium-based browser was found on this machine — install one to continue.",
             }
         self._reply_outcome(outcome, messages)
 
@@ -432,10 +484,14 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         prior_captured_at = None
         if notifier.SESSION_FILE.exists():
             try:
-                prior_captured_at = notifier.load_json(notifier.SESSION_FILE).get("captured_at")
+                prior_captured_at = notifier.load_json(notifier.SESSION_FILE).get(
+                    "captured_at"
+                )
             except Exception:
                 pass
-        outcome = notifier.trigger_auto_refresh(AppHandler.logger, config, force=True, notify_phone=False)
+        outcome = notifier.trigger_auto_refresh(
+            AppHandler.logger, config, force=True, notify_phone=False
+        )
         if outcome == notifier.TRIGGER_LAUNCHED:
             threading.Thread(
                 target=_wait_for_relogin_and_wake,
@@ -447,7 +503,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             notifier.TRIGGER_DISABLED: "auto_refresh_chrome is turned off in Settings.",
             notifier.TRIGGER_LAUNCH_FAILED: "Chrome failed to launch — check the log.",
             notifier.TRIGGER_NO_BROWSER: "No Chrome, Edge, or other Chromium-based browser was found "
-                "on this machine — install one to continue.",
+            "on this machine — install one to continue.",
         }
         self._reply_outcome(outcome, messages)
 
@@ -463,7 +519,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         )
         messages = {
             notifier.TRIGGER_NO_BROWSER: "No Chrome, Edge, or other Chromium-based browser was found "
-                "on this machine. Install one and try again.",
+            "on this machine. Install one and try again.",
             notifier.TRIGGER_LAUNCH_FAILED: "Could not open Chrome — try the manual option below.",
         }
         self._reply_outcome(outcome, messages, default=None)
@@ -506,10 +562,13 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             return
         topic = (payload.get("topic") or "").strip()
         if not topic:
-            self._send_json(400, {"ok": False, "error": "No notification topic set yet."})
+            self._send_json(
+                400, {"ok": False, "error": "No notification topic set yet."}
+            )
             return
         notifier.push_ntfy(
-            AppHandler.logger, topic,
+            AppHandler.logger,
+            topic,
             "info-kierowca: test notification",
             "This is what a real alert will look like.",
             priority="default",
