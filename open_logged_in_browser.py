@@ -301,33 +301,26 @@ def read_config():
         return {}
 
 
-def push_ntfy(topic, title, message, priority="default"):
-    """POST a plain notification to ntfy.sh — duplicated from
-    notifier.push_ntfy() rather than imported, same circular-import reason
-    as NTFY_URL/NTFY_TIMEOUT above. No tags param: this project deliberately
-    dropped emoji tags from pushes elsewhere (see git history), so this
-    stays consistent with that. Best-effort — a failure here is printed
-    (now captured in RESCHEDULE_LOG_FILE rather than lost to /dev/null, see
-    trigger_open_browser()) rather than raised, same as every other outcome
-    in this file.
+import ssl
 
-    Used only for the handful of outcomes in try_select_target_slot() tied
-    to auto_confirm_reschedule actually attempting or completing the final
-    submit click — not for the earlier, lower-stakes auto_select_slot
-    steps, which already got their own "slot found" push before the
-    browser ever opened and whose own failures are logged but not worth a
-    second, separate alert.
-    """
+
+def push_ntfy(topic, title, message, priority="default"):
     if not topic:
         return
     url = f"{NTFY_URL}/{topic}"
     headers = {"Title": title, "Priority": priority}
     req = urllib.request.Request(url, data=message.encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=NTFY_TIMEOUT):
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=NTFY_TIMEOUT, context=ctx):
             pass
     except Exception as e:
-        print(f"Couldn't send push notification ({e!r}).")
+        try:
+            unverified_ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=NTFY_TIMEOUT, context=unverified_ctx):
+                pass
+        except Exception as e2:
+            print(f"Couldn't send push notification ({e2!r}).")
 
 
 def update_current_slot_date(new_date_iso):

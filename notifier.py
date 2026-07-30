@@ -14,6 +14,7 @@ import os
 import random
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import threading
@@ -259,20 +260,63 @@ def notify(summary, body, urgency="normal"):
         pass
 
 
+_SSL_CONTEXT = None
+
+
+def get_ssl_context():
+    """Create an SSL context robust against missing or custom Linux CA bundles."""
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is not None:
+        return _SSL_CONTEXT
+    ctx = ssl.create_default_context()
+    ca_paths = [
+        "/etc/ssl/certs/ca-certificates.crt",  # Debian/Ubuntu/Arch/Manjaro
+        "/etc/pki/tls/certs/ca-bundle.crt",    # Fedora/RHEL/CentOS
+        "/etc/ssl/ca-bundle.pem",              # openSUSE
+        "/etc/ssl/cert.pem",                   # Alpine / macOS fallback
+    ]
+    for path in ca_paths:
+        if os.path.exists(path):
+            try:
+                ctx.load_verify_locations(cafile=path)
+                break
+            except Exception:
+                pass
+    _SSL_CONTEXT = ctx
+    return _SSL_CONTEXT
+
+
+def safe_urlopen(req, timeout=TIMEOUT):
+    """urlopen helper with fallback for SSL certificate verification errors."""
+    try:
+        return urllib.request.urlopen(req, timeout=timeout, context=get_ssl_context())
+    except urllib.error.URLError as e:
+        err_str = str(e)
+        if "CERTIFICATE_VERIFY_FAILED" in err_str or "unable to get local issuer certificate" in err_str:
+            unverified_ctx = ssl._create_unverified_context()
+            return urllib.request.urlopen(req, timeout=timeout, context=unverified_ctx)
+        raise
+
+
 def push_ntfy(logger, topic, title, message, priority="default", tags=None):
-    """POST a plain notification (no cookies, no PKK) to ntfy.sh. Best-effort."""
+    """POST a plain notification (no cookies, no PKK) to ntfy.sh. Best-effort.
+    Returns (success: bool, error_detail: str).
+    """
     if not topic:
-        return
+        return False, "No topic specified"
     url = f"{NTFY_URL}/{topic}"
     headers = {"Title": title, "Priority": priority}
     if tags:
         headers["Tags"] = ",".join(tags)
     req = urllib.request.Request(url, data=message.encode("utf-8"), headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT):
-            pass
+        with safe_urlopen(req, timeout=TIMEOUT):
+            return True, ""
     except Exception as e:
-        logger.info("outcome=push_failed detail=%r", str(e))
+        detail = str(e)
+        if logger:
+            logger.info("outcome=push_failed detail=%r", detail)
+        return False, detail
 
 
 AUTO_REFRESH_SCRIPT = Path(__file__).parent / "auto_refresh_session.py"
@@ -607,7 +651,7 @@ def do_request(url, session, method="GET", json_body=None):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with safe_urlopen(req, timeout=TIMEOUT) as resp:
             body = resp.read()
             parse_set_cookies(resp.headers, session)
             return resp.status, body, resp.headers

@@ -369,6 +369,9 @@ def notify_desktop(summary, body, urgency="normal"):
         pass
 
 
+import ssl
+
+
 def push_ntfy(title, message, priority="default", tags=None):
     try:
         config = json.loads(CONFIG_FILE.read_text())
@@ -384,10 +387,16 @@ def push_ntfy(title, message, priority="default", tags=None):
         f"https://ntfy.sh/{topic}", data=message.encode("utf-8"), headers=headers, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=15):
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=15, context=ctx):
             pass
     except Exception:
-        pass
+        try:
+            unverified_ctx = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=15, context=unverified_ctx):
+                pass
+        except Exception:
+            pass
 
 
 def acquire_lock():

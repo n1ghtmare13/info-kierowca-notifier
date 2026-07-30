@@ -566,14 +566,19 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
                 400, {"ok": False, "error": "No notification topic set yet."}
             )
             return
-        notifier.push_ntfy(
+        ok, err_detail = notifier.push_ntfy(
             AppHandler.logger,
             topic,
             "info-kierowca: test notification",
             "This is what a real alert will look like.",
             priority="default",
         )
-        self._send_json(200, {"ok": True})
+        if ok:
+            self._send_json(200, {"ok": True})
+        else:
+            self._send_json(
+                500, {"ok": False, "error": f"Push failed: {err_detail}"}
+            )
 
     def _handle_reset_account(self):
         """Backs the settings page's "Reset account" button: clears
