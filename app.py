@@ -162,6 +162,16 @@ def build_config(payload):
     profile_number = require_str("profile_number", "PKK number")
     ntfy_topic = require_str("ntfy_topic", "Notification topic")
 
+    login_method = payload.get("login_method", "mobywatel")
+    if login_method not in ("mobywatel", "profil_zaufany"):
+        raise ValueError("Login method must be 'mobywatel' or 'profil_zaufany'")
+
+    pz_login = ""
+    pz_password = ""
+    if login_method == "profil_zaufany":
+        pz_login = require_str("pz_login", "Trusted Profile username")
+        pz_password = require_str("pz_password", "Trusted Profile password")
+
     organization_ids = payload.get("organization_ids")
     if not isinstance(organization_ids, list) or not organization_ids:
         raise ValueError("Pick at least one WORD center")
@@ -223,6 +233,9 @@ def build_config(payload):
         raise ValueError("Current slot date must be a date like 2026-09-14")
 
     config = {
+        "login_method": login_method,
+        "pz_login": pz_login,
+        "pz_password": pz_password,
         "organization_ids": organization_ids,
         "category": category,
         "profile_number": profile_number,
@@ -576,9 +589,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         if ok:
             self._send_json(200, {"ok": True})
         else:
-            self._send_json(
-                500, {"ok": False, "error": f"Push failed: {err_detail}"}
-            )
+            self._send_json(500, {"ok": False, "error": f"Push failed: {err_detail}"})
 
     def _handle_reset_account(self):
         """Backs the settings page's "Reset account" button: clears

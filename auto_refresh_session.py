@@ -20,6 +20,7 @@ without cleaning up.
 Nothing but the two info-kierowca.pl session cookies is read or sent
 anywhere; see cdp_client.py's docstring for the debug-port security note.
 """
+
 import argparse
 import json
 import os
@@ -52,8 +53,13 @@ DEFAULT_TIMEOUT = None
 # flag, so it's included as a fallback — it's preinstalled on all Windows
 # machines, unlike Chrome, which matters for a "no setup needed" install.
 CHROME_CANDIDATES = [
-    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
-    "msedge", "microsoft-edge", "microsoft-edge-stable",
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "msedge",
+    "microsoft-edge",
+    "microsoft-edge-stable",
 ]
 CHROME_MAC_PATH = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 # CHROME_MAC_PATH only covers the common system-wide install location — the
@@ -74,7 +80,10 @@ CHROME_MAC_PATH = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Ch
 # own x86/64 pair).
 CHROME_WIN_PATHS = [
     Path(os.environ.get("LOCALAPPDATA", ""))
-    / "Google" / "Chrome" / "Application" / "chrome.exe",
+    / "Google"
+    / "Chrome"
+    / "Application"
+    / "chrome.exe",
     Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
     Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
 ]
@@ -109,6 +118,7 @@ def _chrome_from_windows_registry():
         if path and Path(path).exists():
             return path
     return None
+
 
 # The login click-path: info-kierowca.pl -> (maybe) "Zaloguj się" -> a PWPW
 # identity-provider chooser with a "gov.pl" tile -> a login.gov.pl chooser
@@ -158,12 +168,15 @@ function __ikw_clickableAncestor(el) {
 }
 """
 
-CLICK_LOGIC_JS = """
+CLICK_LOGIC_JS = (
+    """
 var __IKW_STOP_KEY = '__ikw_auto_click_stopped';
 function __ikw_stopped() {
   try { return !!sessionStorage.getItem(__IKW_STOP_KEY); } catch (e) { return false; }
 }
-""" + CLICKABLE_HELPERS_JS + """
+"""
+    + CLICKABLE_HELPERS_JS
+    + """
 function __ikw_findAndClick(targets) {
   if (__ikw_stopped()) return null;
   var all = document.querySelectorAll('button, a, [role="button"], li, div, span');
@@ -201,6 +214,7 @@ function __ikw_findAndClick(targets) {
   return null;
 }
 """
+)
 
 # One-shot version: used as a slow Python-polled fallback (see try_auto_click).
 AUTO_CLICK_JS = CLICK_LOGIC_JS + (
@@ -237,8 +251,7 @@ AUTO_CLICK_JS = CLICK_LOGIC_JS + (
 # and clicks the tile instantly regardless. So the reliable fix isn't a
 # better in-page watcher — it's not leaving that fallback 3s idle; see
 # wait_for_cookies's poll interval.
-AUTO_CLICK_OBSERVER_JS = CLICK_LOGIC_JS + (
-    """
+AUTO_CLICK_OBSERVER_JS = CLICK_LOGIC_JS + ("""
 (function(targets) {
   if (__ikw_stopped()) return;
   var scheduled = false;
@@ -258,20 +271,19 @@ AUTO_CLICK_OBSERVER_JS = CLICK_LOGIC_JS + (
     document, {childList: true, subtree: true, characterData: true, attributes: true}
   );
 })(%s)
-"""
-    % json.dumps(AUTO_CLICK_TARGETS)
-)
+""" % json.dumps(AUTO_CLICK_TARGETS))
 
 
-def try_auto_click(host, port):
+def try_auto_click(host, port, targets=None):
+    if targets is None:
+        targets = AUTO_CLICK_TARGETS
+    js = CLICK_LOGIC_JS + (
+        "(function(targets) { return __ikw_findAndClick(targets); })(%s)"
+        % json.dumps(targets)
+    )
     try:
-        return cdp_client.evaluate_in_page(host, port, AUTO_CLICK_JS)
+        return cdp_client.evaluate_in_page(host, port, js)
     except Exception as e:
-        # Swallowed by design (Chrome may be mid-navigation) but logged: a
-        # click failing here silently every 0.5s for the whole wait looks
-        # identical, from the outside, to the tile chooser just never
-        # matching — this print is what tells the two apart in
-        # AUTO_REFRESH_LOG_FILE after the fact.
         print(f"try_auto_click error: {e!r}")
         return None
 
@@ -291,7 +303,9 @@ def _chrome_from_macos_spotlight():
     try:
         out = subprocess.check_output(
             ["mdfind", "kMDItemCFBundleIdentifier == 'com.google.Chrome'"],
-            text=True, stderr=subprocess.DEVNULL, timeout=5,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
         )
     except Exception:
         return None
@@ -354,7 +368,9 @@ def notify_desktop(summary, body, urgency="normal"):
     to test on; worst case it silently no-ops there, same as before.
     """
     if sys.platform == "darwin":
-        script = f"display notification {json.dumps(body)} with title {json.dumps(summary)}"
+        script = (
+            f"display notification {json.dumps(body)} with title {json.dumps(summary)}"
+        )
         try:
             subprocess.run(["osascript", "-e", script], check=False)
         except FileNotFoundError:
@@ -362,7 +378,15 @@ def notify_desktop(summary, body, urgency="normal"):
         return
     try:
         subprocess.run(
-            ["notify-send", "-u", urgency, "-a", "info-kierowca-notifier", summary, body],
+            [
+                "notify-send",
+                "-u",
+                urgency,
+                "-a",
+                "info-kierowca-notifier",
+                summary,
+                body,
+            ],
             check=False,
         )
     except FileNotFoundError:
@@ -384,7 +408,10 @@ def push_ntfy(title, message, priority="default", tags=None):
     if tags:
         headers["Tags"] = ",".join(tags)
     req = urllib.request.Request(
-        f"https://ntfy.sh/{topic}", data=message.encode("utf-8"), headers=headers, method="POST"
+        f"https://ntfy.sh/{topic}",
+        data=message.encode("utf-8"),
+        headers=headers,
+        method="POST",
     )
     try:
         ctx = ssl.create_default_context()
@@ -423,32 +450,16 @@ def release_lock():
         pass
 
 
-def wait_for_cookies(host, port, timeout, chrome_proc):
-    """timeout=None waits indefinitely — but always bails out the moment
-    chrome_proc has exited. Without this, a crashed/killed Chrome left this
-    looping forever: fetch_cookies() against a dead debug port just raises,
-    and that's caught by the same `except Exception: pass` that's meant to
-    tolerate Chrome being mid-navigation, so a permanent failure looked
-    identical to a transient one. The process never returned, never hit
-    the `finally` in main() that releases the lock, and never got reaped
-    by the OS (visible as a `<defunct>` zombie in `ps`) — so a Chrome that
-    crashed hours ago could still be silently blocking every future
-    auto-relogin attempt, with no window on screen for anyone to notice.
-
-    The 0.5s poll interval (not the 3s it used to be) matters more than it
-    looks: try_auto_click() is a *fresh* Runtime.evaluate call on its own
-    CDP connection, which — confirmed live 2026-07-18 — is the only thing
-    that reliably clicks through the podmiotyzewnetrzne.login.gov.pl tile
-    chooser. AUTO_CLICK_OBSERVER_JS's in-page MutationObserver (and a
-    setInterval placed alongside it, tried and discarded) never fires at
-    all on that specific page, even though the tiles are clickable within
-    ~1s of landing — so this Python-side retry is the actual click-through
-    mechanism there, not just a backstop, and the old 3s cadence was a
-    real, visible stall directly on top of it. try_auto_click() is a cheap
-    no-op once __ikw_stopped() is true, so polling this often for however
-    long a human takes to scan the QR costs nothing but some idle loopback
-    chatter.
-    """
+def wait_for_cookies(
+    host,
+    port,
+    timeout,
+    chrome_proc,
+    login_method="mobywatel",
+    pz_login="",
+    pz_password="",
+    targets=None,
+):
     deadline = None if timeout is None else time.monotonic() + timeout
     while deadline is None or time.monotonic() < deadline:
         if chrome_proc.poll() is not None:
@@ -460,29 +471,146 @@ def wait_for_cookies(host, port, timeout, chrome_proc):
                 return cookies
         except Exception:
             pass  # Chrome may be mid-navigation; just retry
-        clicked = try_auto_click(host, port)
+
+        if login_method == "profil_zaufany":
+            fill_pz_credentials(host, port, pz_login, pz_password)
+            if check_sms_modal_present(host, port):
+                sms_code = fetch_sms_code_from_google_messages(host, port)
+                if sms_code:
+                    print(f"Captured SMS code: {sms_code}")
+                    inject_sms_code_and_submit(host, port, sms_code)
+
+        clicked = try_auto_click(host, port, targets=targets)
         if clicked:
             print(f"auto-clicked: {clicked!r}")
         time.sleep(0.5)
     return None
 
 
+def fill_pz_credentials(host, port, login, password):
+    """Fill credentials into the Profil Zaufany login form and click submit."""
+    js = f"""
+    (function() {{
+      var l = document.querySelector('input[name="login"], input[id="login"], #login');
+      var p = document.querySelector('input[name="password"], input[id="password"], #password');
+      if (l && p && (!l.value || !p.value)) {{
+        l.value = {json.dumps(login)};
+        l.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        p.value = {json.dumps(password)};
+        p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        var btn = document.querySelector('button[type="submit"], #submitBtn, .btn-primary, button[data-testid="login-submit-btn"]');
+        if (btn) {{ btn.click(); return true; }}
+      }}
+      return false;
+    }})()
+    """
+    try:
+        return cdp_client.evaluate_in_page(host, port, js)
+    except Exception:
+        return False
+
+
+def check_sms_modal_present(host, port):
+    """Check if the SMS code input modal is visible on the PZ page."""
+    js = """
+    (function() {
+      var input = document.querySelector('input[data-testid="sms-code-input"], #smsInput');
+      return !!input;
+    })()
+    """
+    try:
+        return cdp_client.evaluate_in_page(host, port, js)
+    except Exception:
+        return False
+
+
+def fetch_sms_code_from_google_messages(host, port):
+    """Open or switch to Google Messages Web tab and extract the PZePUAP SMS code."""
+    messages_url = "https://messages.google.com/web/conversations/"
+    targets = cdp_client.get_all_targets(host, port)
+
+    msg_target = None
+    for t in targets:
+        if "messages.google.com" in t.get("url", ""):
+            msg_target = t
+            break
+
+    ws_url = (
+        msg_target["webSocketDebuggerUrl"]
+        if msg_target
+        else cdp_client.create_tab(host, port, messages_url)
+    )
+
+    js = r"""
+    (function() {
+      var items = document.querySelectorAll('a[data-e2e-conversation], mws-text-message-part');
+      for (var i = 0; i < items.length; i++) {
+        var text = items[i].innerText || items[i].textContent || '';
+        if (text.indexOf('PZePUAP') !== -1 || text.indexOf('Logowanie do profilu zaufanego') !== -1) {
+          var match = text.match(/Kod:\s*(\d{8})/);
+          if (match) {
+            return match[1];
+          }
+        }
+      }
+      return null;
+    })()
+    """
+    try:
+        return cdp_client.evaluate_in_target_ws(ws_url, js)
+    except Exception:
+        return None
+
+
+def inject_sms_code_and_submit(host, port, code):
+    """Inject the SMS code into the PZ input field and click confirm."""
+    js = f"""
+    (function(code) {{
+      var input = document.querySelector('input[data-testid="sms-code-input"], #smsInput');
+      if (input) {{
+        input.value = code;
+        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        var btn = document.querySelector('button[data-testid="sms-code-submit-btn"], button[aria-label="Potwierdź"]');
+        if (btn) {{
+          btn.click();
+          return true;
+        }}
+      }}
+      return false;
+    }})({json.dumps(code)})
+    """
+    try:
+        return cdp_client.evaluate_in_page(host, port, js)
+    except Exception:
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--url", default=DEFAULT_URL, help="Page to open Chrome to (default: %(default)s)")
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help="Page to open Chrome to (default: %(default)s)",
+    )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
-        "--timeout", type=int, default=DEFAULT_TIMEOUT,
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT,
         help="Seconds to wait for the QR to be scanned before giving up (default: wait indefinitely)",
     )
     parser.add_argument(
-        "--no-phone-push", action="store_true",
+        "--no-phone-push",
+        action="store_true",
         help="Skip the ntfy push notification — used when a person just clicked a "
         "button and is already watching Chrome, so a 'scan the QR' push to their "
         "phone would be redundant. The desktop notification still fires.",
     )
     parser.add_argument(
-        "--keep-open", action="store_true", help="Leave Chrome open after capturing cookies"
+        "--keep-open",
+        action="store_true",
+        help="Leave Chrome open after capturing cookies",
     )
     args = parser.parse_args()
 
@@ -513,6 +641,43 @@ def main():
     if not acquire_lock():
         print("A refresh is already in progress (lock file present) — exiting.")
         return
+
+    # Load login configuration
+    try:
+        config = json.loads(CONFIG_FILE.read_text())
+    except Exception:
+        config = {}
+
+    login_method = config.get("login_method", "mobywatel")
+    pz_login = config.get("pz_login", "")
+    pz_password = config.get("pz_password", "")
+
+    if login_method == "profil_zaufany":
+        targets = ["Profil zaufany", "gov.pl", "Zaloguj się"]
+    else:
+        targets = ["Aplikacja mObywatel", "gov.pl", "Zaloguj się"]
+
+    observer_js = CLICK_LOGIC_JS + ("""
+(function(targets) {
+  if (__ikw_stopped()) return;
+  var scheduled = false;
+  var observer = new MutationObserver(schedule);
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(function() {
+      scheduled = false;
+      var clicked = __ikw_findAndClick(targets);
+      if (clicked === targets[0]) observer.disconnect();
+    });
+  }
+  var clicked = __ikw_findAndClick(targets);
+  if (clicked === targets[0]) return;
+  observer.observe(
+    document, {childList: true, subtree: true, characterData: true, attributes: true}
+  );
+})(%s)
+""" % json.dumps(targets))
 
     chrome_proc = None
     try:
@@ -557,8 +722,17 @@ def main():
         # Register the click-observer before the real page ever loads, then
         # navigate — so it's already watching from the first paint instead
         # of racing our own next poll tick.
-        cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, AUTO_CLICK_OBSERVER_JS)
-        cookies = wait_for_cookies("127.0.0.1", args.port, args.timeout, chrome_proc)
+        cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
+        cookies = wait_for_cookies(
+            "127.0.0.1",
+            args.port,
+            args.timeout,
+            chrome_proc,
+            login_method=login_method,
+            pz_login=pz_login,
+            pz_password=pz_password,
+            targets=targets,
+        )
 
         if cookies is None:
             if chrome_proc.poll() is not None:

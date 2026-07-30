@@ -586,6 +586,29 @@ WIZARD_PAGE = """<!doctype html>
 
   <form id="form">
     <fieldset>
+      <legend>Authentication method</legend>
+      <label>How to refresh your session</label>
+      <div class="pill-group" id="login-methods">
+        <div class="pill on" data-val="mobywatel" role="button" tabindex="0">mObywatel (QR code)</div>
+        <div class="pill" data-val="profil_zaufany" role="button" tabindex="0">Profil Zaufany (SMS)</div>
+      </div>
+      <input type="hidden" id="login_method" value="mobywatel">
+
+      <div id="pz-fields-block" style="display:none; margin-top:1rem;">
+        <label for="pz_login">Trusted Profile username / e-mail</label>
+        <input type="text" id="pz_login" autocomplete="off" placeholder="e.g. jan.kowalski">
+
+        <label for="pz_password">Trusted Profile password</label>
+        <div class="reveal">
+          <input type="password" id="pz_password" autocomplete="off" placeholder="••••••••">
+          <button type="button" class="reveal-btn" id="reveal-pz-pass" aria-label="Show or hide password"></button>
+        </div>
+        <div class="hint" style="margin-top:0.4rem;">
+          Requires a one-time pairing of your phone with <a href="https://messages.google.com/web" target="_blank" style="color:var(--accent-soft);">Google Messages Web</a> in the Chrome window so SMS codes can be read automatically.
+        </div>
+      </div>
+    </fieldset>
+    <fieldset>
       <legend>Exam &amp; centers</legend>
       <div id="pkk-auto-block" style="display:none;">
         <label for="pkk-profile-select">Your PKK profile</label>
@@ -1241,6 +1264,22 @@ dpInput.addEventListener('click', () => { calendar.classList.contains('open') ? 
 dpInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCalendar(); });
 document.addEventListener('click', (e) => { if (!document.getElementById('datepick').contains(e.target)) closeCalendar(); });
 
+// ---- Authentication method handling (mObywatel vs Profil Zaufany) ----
+const loginMethodHidden = document.getElementById('login_method');
+const pzFieldsBlock = document.getElementById('pz-fields-block');
+const pzPassInput = document.getElementById('pz_password');
+wireReveal(pzPassInput, document.getElementById('reveal-pz-pass'));
+
+document.querySelectorAll('#login-methods .pill').forEach((p) => {
+  p.addEventListener('click', () => {
+    document.querySelectorAll('#login-methods .pill').forEach((x) => x.classList.remove('on'));
+    p.classList.add('on');
+    const val = p.dataset.val;
+    loginMethodHidden.value = val;
+    pzFieldsBlock.style.display = val === 'profil_zaufany' ? 'block' : 'none';
+  });
+});
+
 renderSelected();
 
 if (EXISTING_CONFIG) {
@@ -1298,6 +1337,17 @@ if (EXISTING_CONFIG) {
     searchOffsetSlider.value = 0;
   }
   updateSearchOffsetDisplay();
+
+  if (EXISTING_CONFIG.login_method) {
+    const lm = EXISTING_CONFIG.login_method;
+    loginMethodHidden.value = lm;
+    document.querySelectorAll('#login-methods .pill').forEach((p) => {
+      p.classList.toggle('on', p.dataset.val === lm);
+    });
+    pzFieldsBlock.style.display = lm === 'profil_zaufany' ? 'block' : 'none';
+  }
+  if (EXISTING_CONFIG.pz_login) document.getElementById('pz_login').value = EXISTING_CONFIG.pz_login;
+  if (EXISTING_CONFIG.pz_password) document.getElementById('pz_password').value = EXISTING_CONFIG.pz_password;
 }
 
 document.getElementById('copy-ntfy').addEventListener('click', () => {
@@ -1380,6 +1430,9 @@ document.getElementById('form').addEventListener('submit', async (e) => {
       auto_select_slot: switchOn('auto_select_slot'),
       auto_confirm_reschedule: switchOn('auto_confirm_reschedule'),
       ntfy_topic: ntfyInput.value,
+      login_method: loginMethodHidden.value,
+      pz_login: document.getElementById('pz_login').value.trim(),
+      pz_password: document.getElementById('pz_password').value,
     };
 
     const res = await fetch('/setup', {
@@ -1394,6 +1447,7 @@ document.getElementById('form').addEventListener('submit', async (e) => {
     errorEl.classList.add('show');
   }
 });
+
 </script>
 </body>
 </html>

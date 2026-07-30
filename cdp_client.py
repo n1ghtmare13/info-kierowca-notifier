@@ -9,6 +9,7 @@ and injects an already-saved session instead of waiting for a fresh login).
 Everything here talks to 127.0.0.1 only and writes straight to session.json.
 Nothing is sent to info-kierowca.pl, ntfy.sh, or anywhere else by this module.
 """
+
 import base64
 import contextlib
 import json
@@ -17,7 +18,7 @@ import socket
 import struct
 import time
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from paths import CONFIG_DIR, SESSION_FILE
 
@@ -104,7 +105,9 @@ def ws_recv_message(sock):
 
 
 def cdp_call(sock, req_id, method, params=None):
-    ws_send_text(sock, json.dumps({"id": req_id, "method": method, "params": params or {}}))
+    ws_send_text(
+        sock, json.dumps({"id": req_id, "method": method, "params": params or {}})
+    )
     while True:
         msg = json.loads(ws_recv_message(sock))
         if msg.get("id") == req_id:
@@ -131,7 +134,9 @@ def wait_for_debug_port(host, port, timeout=15):
 
 def browser_ws_url(host, port):
     """Websocket URL of the browser-level debugger target."""
-    with urllib.request.urlopen(f"http://{host}:{port}/json/version", timeout=5) as resp:
+    with urllib.request.urlopen(
+        f"http://{host}:{port}/json/version", timeout=5
+    ) as resp:
         return json.loads(resp.read())["webSocketDebuggerUrl"]
 
 
@@ -214,7 +219,10 @@ def evaluate_in_page(host, port, expression):
         return None
     with cdp_socket(ws_url) as sock:
         result = cdp_call(
-            sock, 1, "Runtime.evaluate", {"expression": expression, "returnByValue": True}
+            sock,
+            1,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
         )
     return result.get("result", {}).get("value")
 
@@ -236,7 +244,9 @@ def inject_and_navigate(host, port, url, script):
     with cdp_socket(ws_url) as sock:
         cdp_call(sock, 1, "Page.enable")
         if script:
-            cdp_call(sock, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": script})
+            cdp_call(
+                sock, 2, "Page.addScriptToEvaluateOnNewDocument", {"source": script}
+            )
         cdp_call(sock, 3, "Page.navigate", {"url": url})
 
 
@@ -259,3 +269,32 @@ def write_session_file(cookies):
         json.dump({"cookies": cookies, "captured_at": time.time()}, f, indent=2)
     tmp.replace(SESSION_FILE)
     SESSION_FILE.chmod(0o600)
+
+
+def create_tab(host, port, url):
+    """Open a new tab in Chrome and return its webSocketDebuggerUrl."""
+    req_url = f"http://{host}:{port}/json/new?{quote(url)}"
+    req = urllib.request.Request(req_url, method="PUT")
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        data = json.loads(resp.read())
+        return data.get("webSocketDebuggerUrl")
+
+
+def get_all_targets(host, port):
+    """Return all open targets/tabs in Chrome."""
+    with urllib.request.urlopen(f"http://{host}:{port}/json", timeout=5) as resp:
+        return json.loads(resp.read())
+
+
+def evaluate_in_target_ws(ws_url, expression):
+    """Execute a JS expression in a specific tab target by websocket URL."""
+    if not ws_url:
+        return None
+    with cdp_socket(ws_url) as sock:
+        result = cdp_call(
+            sock,
+            1,
+            "Runtime.evaluate",
+            {"expression": expression, "returnByValue": True},
+        )
+    return result.get("result", {}).get("value")
