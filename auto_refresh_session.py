@@ -1016,47 +1016,38 @@ def main():
 
     chrome_proc = None
     try:
-        # Check if Chrome is ALREADY running on debug port
-        if cdp_client.debug_port_open("127.0.0.1", args.port):
-            print(f"Browser already running on port {args.port} — reusing existing window.")
-            cdp_client.bring_to_front("127.0.0.1", args.port)
-            try:
-                cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
-            except Exception:
-                pass
-        else:
-            chrome = find_chrome()
-            print(f"using browser: {chrome}")
-            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-            chrome_proc = subprocess.Popen(
-                [
-                    chrome,
-                    f"--remote-debugging-port={args.port}",
-                    f"--user-data-dir={PROFILE_DIR}",
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--window-size=900,850",
-                    "--app=about:blank",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        chrome = find_chrome()
+        print(f"using browser: {chrome}")
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        chrome_proc = subprocess.Popen(
+            [
+                chrome,
+                f"--remote-debugging-port={args.port}",
+                f"--user-data-dir={PROFILE_DIR}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--window-size=900,850",
+                args.url,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
-            notify_desktop(
+        notify_desktop(
+            "info-kierowca: relogin needed",
+            "Chrome opened — scan the QR in the app to log back in",
+            "critical",
+        )
+        if not args.no_phone_push:
+            push_ntfy(
                 "info-kierowca: relogin needed",
-                "Chrome opened — scan the QR in the app to log back in",
-                "critical",
+                "Chrome opened on your desktop — scan the QR in the app to log back in",
+                priority="default",
             )
-            if not args.no_phone_push:
-                push_ntfy(
-                    "info-kierowca: relogin needed",
-                    "Chrome opened on your desktop — scan the QR in the app to log back in",
-                    priority="default",
-                )
 
-            cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
-            cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
-            cdp_client.bring_to_front("127.0.0.1", args.port)
+        cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
+        cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
+        cdp_client.bring_to_front("127.0.0.1", args.port)
 
         cookies = wait_for_cookies(
             "127.0.0.1",

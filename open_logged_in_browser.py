@@ -607,27 +607,23 @@ def main():
             "to log in again."
         )
 
-    if cdp_client.debug_port_open("127.0.0.1", args.port):
-        print(f"Browser already running on port {args.port} — reusing existing window.")
-        cdp_client.bring_to_front("127.0.0.1", args.port)
-    else:
-        chrome = find_chrome()
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(
-            [
-                chrome,
-                f"--remote-debugging-port={args.port}",
-                f"--user-data-dir={PROFILE_DIR}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--start-maximized",
-                "about:blank",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
+    chrome = find_chrome()
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen(
+        [
+            chrome,
+            f"--remote-debugging-port={args.port}",
+            f"--user-data-dir={PROFILE_DIR}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--start-maximized",
+            args.url,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
     cdp_client.set_cookies(
         "127.0.0.1", args.port, {**cookies, "CookieScriptConsent": consent_cookie()}
     )
