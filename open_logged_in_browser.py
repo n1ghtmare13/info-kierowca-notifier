@@ -98,6 +98,20 @@ CONFIRM_CHANGE_DATE_TEXT = "Zmień termin rezerwacji"
 SUMMARY_BUTTON_TEXT = "Przejdź do podsumowania"
 CONFIRM_SUMMARY_TEXT = "Potwierdź i przejdź dalej"
 
+KEEP_ALIVE_JS = """
+(function() {
+  if (window.__ikw_keep_alive_registered) return;
+  window.__ikw_keep_alive_registered = true;
+  setInterval(function() {
+    try {
+      window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Shift' }));
+      fetch('/bknd/auth/api/v1/jwt/refresh', { method: 'GET', credentials: 'include' }).catch(function(){});
+    } catch(e) {}
+  }, 25000);
+})()
+"""
+
 
 def click_text_js(text):
     # Deliberately stricter than auto_refresh_session.py's chooser matching
@@ -314,7 +328,7 @@ def push_ntfy(topic, title, message, priority="default"):
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=NTFY_TIMEOUT, context=ctx):
             pass
-    except Exception as e:
+    except Exception:
         try:
             unverified_ctx = ssl._create_unverified_context()
             with urllib.request.urlopen(req, timeout=NTFY_TIMEOUT, context=unverified_ctx):
@@ -593,28 +607,32 @@ def main():
             "to log in again."
         )
 
-    chrome = find_chrome()
-    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(
-        [
-            chrome,
-            f"--remote-debugging-port={args.port}",
-            f"--user-data-dir={PROFILE_DIR}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--start-maximized",
-            "about:blank",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-    cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
+    if cdp_client.debug_port_open("127.0.0.1", args.port):
+        print(f"Browser already running on port {args.port} — reusing existing window.")
+        cdp_client.bring_to_front("127.0.0.1", args.port)
+    else:
+        chrome = find_chrome()
+        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(
+            [
+                chrome,
+                f"--remote-debugging-port={args.port}",
+                f"--user-data-dir={PROFILE_DIR}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--start-maximized",
+                "about:blank",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
     cdp_client.set_cookies(
         "127.0.0.1", args.port, {**cookies, "CookieScriptConsent": consent_cookie()}
     )
-    cdp_client.navigate("127.0.0.1", args.port, args.url)
+    cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, KEEP_ALIVE_JS)
+    cdp_client.bring_to_front("127.0.0.1", args.port)
 
     print(f"Chrome opened at {args.url}, logged in using {cdp_client.SESSION_FILE}.")
     if args.no_auto_click:

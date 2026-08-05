@@ -25,8 +25,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import auto_refresh_session
+import cdp_client
 import open_logged_in_browser
 from paths import (  # noqa: F401  (re-exported: other modules read these off notifier)
+    AUTO_REFRESH_COOLDOWN_FILE,
+    AUTO_REFRESH_LOCK,
     AUTO_REFRESH_LOG_FILE,
     CONFIG_FILE,
     LOG_FILE,
@@ -320,7 +323,6 @@ def push_ntfy(logger, topic, title, message, priority="default", tags=None):
 
 
 AUTO_REFRESH_SCRIPT = Path(__file__).parent / "auto_refresh_session.py"
-AUTO_REFRESH_LOCK = auto_refresh_session.LOCK_FILE
 
 
 # Outcome vocabulary returned by trigger_auto_refresh() and
@@ -384,12 +386,27 @@ def trigger_auto_refresh(logger, config, force=False, notify_phone=True):
     if not auto_refresh_session.chrome_available():
         logger.info("outcome=auto_refresh_no_browser detail=no_chromium_found")
         return TRIGGER_NO_BROWSER
+    if force:
+        AUTO_REFRESH_COOLDOWN_FILE.unlink(missing_ok=True)
+    elif AUTO_REFRESH_COOLDOWN_FILE.exists():
+        try:
+            last_failed = float(AUTO_REFRESH_COOLDOWN_FILE.read_text().strip())
+            if time.time() - last_failed < 300:  # 5 minute cooldown
+                logger.info("outcome=auto_refresh_skipped detail=cooldown_active")
+                return TRIGGER_ALREADY_RUNNING
+        except Exception:
+            pass
+
+    if cdp_client.debug_port_open("127.0.0.1", auto_refresh_session.DEFAULT_PORT):
+        cdp_client.bring_to_front("127.0.0.1", auto_refresh_session.DEFAULT_PORT)
+
     if AUTO_REFRESH_LOCK.exists():
         try:
             pid = int(AUTO_REFRESH_LOCK.read_text().strip())
             os.kill(pid, 0)
             if not force:
                 logger.info("outcome=auto_refresh_skipped detail=already_running pid=%s", pid)
+                cdp_client.bring_to_front("127.0.0.1", auto_refresh_session.DEFAULT_PORT)
                 return TRIGGER_ALREADY_RUNNING
             logger.info("outcome=auto_refresh_force_restart detail=killing_stale pid=%s", pid)
             try:
@@ -397,11 +414,6 @@ def trigger_auto_refresh(logger, config, force=False, notify_phone=True):
             except OSError:
                 pass
             else:
-                # Wait for it to actually go before relaunching. It has a
-                # SIGTERM handler to run (closing its Chrome, which still
-                # holds the shared --user-data-dir), and the systemd path
-                # reuses a fixed --unit name that systemd-run refuses to
-                # reissue while the old unit is still deactivating.
                 for _ in range(50):  # ~5s
                     try:
                         os.kill(pid, 0)

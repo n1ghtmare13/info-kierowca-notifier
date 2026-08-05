@@ -13,7 +13,7 @@ can sit at the bottom of the import graph and be safely imported everywhere.
 """
 from pathlib import Path
 
-__version__ = "1.2.1"
+__version__ = "1.4.0"
 
 CONFIG_DIR = Path.home() / ".config" / "info-kierowca-notifier"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -27,6 +27,7 @@ STATUS_FILE = STATE_DIR / "status.json"
 # checks are driven by app.py's in-process loop or a systemd timer tick.
 PAUSE_FILE = STATE_DIR / "paused"
 AUTO_REFRESH_LOCK = STATE_DIR / "auto-refresh.lock"
+AUTO_REFRESH_COOLDOWN_FILE = STATE_DIR / "auto-refresh-cooldown"
 
 # Both added 2026-07-20 for open_logged_in_browser.py's experimental
 # auto_confirm_reschedule flow (see notifier.trigger_open_browser() and

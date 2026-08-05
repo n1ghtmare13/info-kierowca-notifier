@@ -23,6 +23,7 @@ import webbrowser
 from datetime import datetime
 
 import auto_refresh_session
+import cdp_client
 import dashboard_server
 import notifier
 import open_logged_in_browser
@@ -249,6 +250,7 @@ def build_config(payload):
         "phone_alerts_relogin": bool(payload.get("phone_alerts_relogin", True)),
         "auto_refresh_chrome": bool(payload.get("auto_refresh_chrome", True)),
         "auto_open_browser": bool(payload.get("auto_open_browser", True)),
+        "dev_mode": bool(payload.get("dev_mode", False)),
     }
     # Both experimental, off-by-default — see notifier.trigger_open_browser()/
     # open_logged_in_browser.py. auto_confirm_reschedule is meaningless without
@@ -434,6 +436,10 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             self._set_paused(False)
         elif self.path == "/test-push":
             self._handle_test_push()
+        elif self.path == "/pair-google-messages":
+            self._handle_pair_google_messages()
+        elif self.path == "/test-google-messages":
+            self._handle_test_google_messages()
         elif self.path == "/reset-account":
             self._handle_reset_account()
         else:
@@ -590,6 +596,59 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
         else:
             self._send_json(500, {"ok": False, "error": f"Push failed: {err_detail}"})
+
+    def _handle_pair_google_messages(self):
+        """Launches Chrome with persistent profile for Google Messages Web pairing."""
+        ok, msg = auto_refresh_session.open_google_messages_pairing()
+        if ok:
+            self._send_json(200, {"ok": True, "message": msg})
+        else:
+            self._send_json(500, {"ok": False, "error": msg})
+
+    def _handle_test_google_messages(self):
+        """Test extraction of PZePUAP SMS code directly from Google Messages Web with automatic waiting."""
+        try:
+            port = auto_refresh_session.DEFAULT_PORT
+            if not cdp_client.debug_port_open("127.0.0.1", port):
+                ok, msg = auto_refresh_session.open_google_messages_pairing(port=port)
+                if not ok:
+                    self._send_json(200, {"ok": False, "error": msg})
+                    return
+                try:
+                    cdp_client.wait_for_debug_port("127.0.0.1", port, timeout=10)
+                except Exception as e:
+                    self._send_json(200, {"ok": False, "error": f"Chrome debug port failed to open: {e}"})
+                    return
+
+            info = None
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                info = auto_refresh_session.fetch_sms_code_info_from_google_messages("127.0.0.1", port)
+                if info:
+                    break
+                time.sleep(1)
+
+            if info:
+                self._send_json(
+                    200,
+                    {
+                        "ok": True,
+                        "code": info.get("code"),
+                        "date_str": info.get("date_str"),
+                        "time_str": info.get("time_str"),
+                        "message": f"Found SMS Code: {info.get('code')} (Sent {info.get('date_str')}, {info.get('time_str')})",
+                    },
+                )
+            else:
+                self._send_json(
+                    200,
+                    {
+                        "ok": False,
+                        "error": "No PZePUAP SMS code found. Ensure Google Messages Web is paired and loaded in Chrome.",
+                    },
+                )
+        except Exception as e:
+            self._send_json(200, {"ok": False, "error": f"Error testing Google Messages: {e}"})
 
     def _handle_reset_account(self):
         """Backs the settings page's "Reset account" button: clears

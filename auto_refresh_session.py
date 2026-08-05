@@ -34,6 +34,7 @@ from pathlib import Path
 
 import cdp_client
 
+from paths import AUTO_REFRESH_COOLDOWN_FILE  # noqa: E402
 from paths import AUTO_REFRESH_LOCK as LOCK_FILE  # noqa: E402
 from paths import CONFIG_FILE, STATE_DIR  # noqa: E402,F401
 
@@ -179,36 +180,62 @@ function __ikw_stopped() {
     + """
 function __ikw_findAndClick(targets) {
   if (__ikw_stopped()) return null;
+  var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+  if (document.querySelector('.alertPage, [class*="alertPage"], .wkProcessUsed') || bodyText.indexOf('wkprocessused') !== -1 || bodyText.indexOf('alertpage') !== -1) {
+    return null;
+  }
   var all = document.querySelectorAll('button, a, [role="button"], li, div, span');
   for (var ti = 0; ti < targets.length; ti++) {
     var text = targets[ti];
     var best = null;
     for (var i = 0; i < all.length; i++) {
       var el = all[i];
-      // textContent (unlike innerText) includes text from display:none
-      // elements, so a not-yet-revealed tile that's already in the DOM
-      // (common in SPA choosers that toggle visibility via a class rather
-      // than mounting/unmounting) must not be matched via that fallback.
       if (!__ikw_isVisible(el)) continue;
+
+      // Skip header, footer, logo, language switcher, go-back, and external links
+      var ancestor = el;
+      var skip = false;
+      for (var k = 0; k < 6 && ancestor; k++) {
+        var tag = (ancestor.tagName || '').toLowerCase();
+        var cls = (ancestor.className || '').toString().toLowerCase();
+        var href = (ancestor.href || '').toString().toLowerCase();
+        if (tag === 'header' || tag === 'footer' || tag === 'app-logo' || tag === 'app-wk-footer' || tag === 'app-wk-language-switcher') {
+          skip = true; break;
+        }
+        if (cls.indexOf('logo') !== -1 || cls.indexOf('footer') !== -1 || cls.indexOf('go-back') !== -1) {
+          skip = true; break;
+        }
+        if (href.indexOf('www.gov.pl') !== -1 && href.indexOf('login') === -1) {
+          skip = true; break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+      if (skip) continue;
+
       var t = (el.innerText || el.textContent || '').trim();
-      if (t && t.length < 200 && t.toLowerCase().indexOf(text.toLowerCase()) !== -1) {
-        // <=, not <: querySelectorAll returns document order, so an outer
-        // wrapper div is always seen before the inner button/span it wraps.
-        // When their trimmed text is the same length (the wrapper contains
-        // nothing but that one label), a strict < would keep the first
-        // (outer, usually non-clickable) match instead of the more
-        // specific inner one -- and __ikw_clickableAncestor only walks
-        // *up* from whatever's picked, so it would never reach the real
-        // clickable element in that case.
+      var tLower = t.toLowerCase();
+      if (tLower.indexOf('załóż') !== -1 || tLower.indexOf('zaloz') !== -1) continue;
+      if (tLower.indexOf('przypomnij') !== -1) continue;
+      if (tLower.indexOf('polityka') !== -1 || tLower.indexOf('pomoc') !== -1) continue;
+
+      if (t && t.length < 200 && tLower.indexOf(text.toLowerCase()) !== -1) {
         if (!best || t.length <= best[1].length) best = [el, t];
       }
     }
     if (best) {
-      __ikw_clickableAncestor(best[0]).click();
+      var targetEl = __ikw_clickableAncestor(best[0]);
+      targetEl.click();
       if (text === targets[0]) {
         try { sessionStorage.setItem(__IKW_STOP_KEY, '1'); } catch (e) {}
       }
-      return text;
+      return JSON.stringify({
+        target: text,
+        matched_text: best[1],
+        tag: targetEl.tagName,
+        id: targetEl.id || '',
+        class: targetEl.className || '',
+        href: targetEl.href || ''
+      });
     }
   }
   return null;
@@ -282,9 +309,24 @@ def try_auto_click(host, port, targets=None):
         % json.dumps(targets)
     )
     try:
-        return cdp_client.evaluate_in_page(host, port, js)
+        raw_res = cdp_client.evaluate_in_page(host, port, js)
+        if raw_res:
+            try:
+                info = json.loads(raw_res)
+                target = info.get("target")
+                matched = info.get("matched_text")
+                tag = info.get("tag")
+                el_id = info.get("id")
+                el_cls = info.get("class")
+                href = info.get("href")
+                print(f"[AUTO-CLICK LOG] Target='{target}' (matched='{matched}') -> Clicked <{tag} id='{el_id}' class='{el_cls}' href='{href}'>")
+                return target
+            except Exception:
+                print(f"[AUTO-CLICK LOG] Clicked element: {raw_res!r}")
+                return str(raw_res)
+        return None
     except Exception as e:
-        print(f"try_auto_click error: {e!r}")
+        print(f"[AUTO-CLICK LOG] try_auto_click error: {e!r}")
         return None
 
 
@@ -396,6 +438,39 @@ def notify_desktop(summary, body, urgency="normal"):
 import ssl
 
 
+def open_google_messages_pairing(port=DEFAULT_PORT):
+    """Launch or attach Chrome with persistent PROFILE_DIR to let user pair Google Messages Web."""
+    if cdp_client.debug_port_open("127.0.0.1", port):
+        try:
+            cdp_client.create_tab("127.0.0.1", port, "https://messages.google.com/web")
+            cdp_client.bring_to_front("127.0.0.1", port)
+            return True, "Opened Google Messages Web in existing Chrome window"
+        except Exception:
+            pass
+
+    chrome = find_chrome()
+    if not chrome:
+        return False, "No Chrome, Edge, or Chromium browser found on this machine."
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.Popen(
+            [
+                chrome,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={PROFILE_DIR}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--window-size=900,850",
+                "https://messages.google.com/web",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True, "Chrome opened for Google Messages pairing"
+    except Exception as e:
+        return False, f"Could not launch Chrome: {e}"
+
+
 def push_ntfy(title, message, priority="default", tags=None):
     try:
         config = json.loads(CONFIG_FILE.read_text())
@@ -450,6 +525,29 @@ def release_lock():
         pass
 
 
+def dev_pause(step_name, dev_mode=False):
+    if dev_mode:
+        print(
+            f"[DEV-MODE] Pausing 5s before step: '{step_name}'... (Close Chrome window now to abort)"
+        )
+        time.sleep(5)
+
+
+def check_pz_form_present(host, port):
+    """Check if Profil Zaufany login/password fields are present on page."""
+    js = """
+    (function() {
+      var l = document.querySelector('input#username, input[formcontrolname="login"], input[data-testid="username-input"] input, input[name="login"], input[id="login"], #login');
+      var p = document.querySelector('input#password, input[formcontrolname="password"], input[data-testid="password-input"] input, input[name="password"], input[id="password"], #password');
+      return !!(l && p);
+    })()
+    """
+    try:
+        return cdp_client.evaluate_in_page(host, port, js)
+    except Exception:
+        return False
+
+
 def wait_for_cookies(
     host,
     port,
@@ -459,10 +557,14 @@ def wait_for_cookies(
     pz_login="",
     pz_password="",
     targets=None,
+    dev_mode=False,
 ):
     deadline = None if timeout is None else time.monotonic() + timeout
+    pz_submitted_at = None
+    state = "CHOOSER"  # States: CHOOSER, CREDENTIALS, SMS_WAITING, SUBMITTED_SMS
+
     while deadline is None or time.monotonic() < deadline:
-        if chrome_proc.poll() is not None:
+        if chrome_proc and chrome_proc.poll() is not None and not cdp_client.debug_port_open(host, port):
             return None
         try:
             raw = cdp_client.fetch_cookies(host, port)
@@ -473,40 +575,124 @@ def wait_for_cookies(
             pass  # Chrome may be mid-navigation; just retry
 
         if login_method == "profil_zaufany":
-            fill_pz_credentials(host, port, pz_login, pz_password)
+            # State Machine transition checks
             if check_sms_modal_present(host, port):
-                sms_code = fetch_sms_code_from_google_messages(host, port)
+                if state != "SMS_WAITING" and state != "SUBMITTED_SMS":
+                    print("[PZ-LOGIN LOG] SMS Modal detected. Transitioning to SMS_WAITING (Auto-clicker disabled).")
+                    state = "SMS_WAITING"
+            elif check_pz_form_present(host, port):
+                if state == "CHOOSER":
+                    print("[PZ-LOGIN LOG] PZ Credential form detected. Transitioning to CREDENTIALS.")
+                    state = "CREDENTIALS"
+
+            if state == "CREDENTIALS":
+                if fill_pz_credentials(host, port, pz_login, pz_password, dev_mode=dev_mode):
+                    if pz_submitted_at is None:
+                        pz_submitted_at = time.time()
+                    state = "SMS_WAITING"
+
+            elif state == "SMS_WAITING":
+                # AUTO-CLICKER IS STRICTLY DISABLED IN SMS_WAITING
+                sms_code = fetch_sms_code_from_google_messages(
+                    host, port, min_timestamp=pz_submitted_at
+                )
                 if sms_code:
                     print(f"Captured SMS code: {sms_code}")
+                    dev_pause(f"submitting SMS code {sms_code}", dev_mode)
+                    cdp_client.bring_to_front(host, port, url_pattern="gov.pl")
                     inject_sms_code_and_submit(host, port, sms_code)
+                    state = "SUBMITTED_SMS"
 
-        clicked = try_auto_click(host, port, targets=targets)
-        if clicked:
-            print(f"auto-clicked: {clicked!r}")
+            elif state == "CHOOSER":
+                clicked = try_auto_click(host, port, targets=targets)
+                if clicked:
+                    print(f"auto-clicked: {clicked!r}")
+        else:
+            clicked = try_auto_click(host, port, targets=targets)
+            if clicked:
+                print(f"auto-clicked: {clicked!r}")
+
         time.sleep(0.5)
     return None
 
 
-def fill_pz_credentials(host, port, login, password):
+def fill_pz_credentials(host, port, login, password, dev_mode=False):
     """Fill credentials into the Profil Zaufany login form and click submit."""
+    check_js = """
+    (function() {
+      if (window.__ikw_pz_submitted) return false;
+      var l = document.querySelector('input#username, input[formcontrolname="login"], input[data-testid="username-input"] input, input[name="login"], input[id="login"], #login');
+      var p = document.querySelector('input#password, input[formcontrolname="password"], input[data-testid="password-input"] input, input[name="password"], input[id="password"], #password');
+      return !!(l && p);
+    })()
+    """
+    try:
+        if cdp_client.evaluate_in_page(host, port, check_js):
+            dev_pause("submitting Profil Zaufany credentials", dev_mode)
+    except Exception:
+        pass
+
     js = f"""
     (function() {{
-      var l = document.querySelector('input[name="login"], input[id="login"], #login');
-      var p = document.querySelector('input[name="password"], input[id="password"], #password');
-      if (l && p && (!l.value || !p.value)) {{
-        l.value = {json.dumps(login)};
-        l.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        p.value = {json.dumps(password)};
-        p.dispatchEvent(new Event('input', {{ bubbles: true }}));
-        var btn = document.querySelector('button[type="submit"], #submitBtn, .btn-primary, button[data-testid="login-submit-btn"]');
-        if (btn) {{ btn.click(); return true; }}
+      if (window.__ikw_pz_submitted) return null;
+      var errEl = document.querySelector('.alertPage, [class*="alertPage"], .wkProcessUsed');
+      var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+      if (errEl || bodyText.indexOf('wkprocessused') !== -1 || bodyText.indexOf('został już użyty') !== -1 || bodyText.indexOf('zostal juz uzyty') !== -1) {{
+        return JSON.stringify({{ error: 'wk_process_used', message: 'Profil Zaufany process expired or already used.' }});
       }}
-      return false;
+      var l = document.querySelector('input#username, input[formcontrolname="login"], input[data-testid="username-input"] input, input[name="login"], input[id="login"], #login');
+      var p = document.querySelector('input#password, input[formcontrolname="password"], input[data-testid="password-input"] input, input[name="password"], input[id="password"], #password');
+      if (l && p) {{
+        if (!l.value || !p.value) {{
+          l.value = {json.dumps(login)};
+          l.dispatchEvent(new Event('input', {{ bubbles: true }}));
+          l.dispatchEvent(new Event('change', {{ bubbles: true }}));
+          p.value = {json.dumps(password)};
+          p.dispatchEvent(new Event('input', {{ bubbles: true }}));
+          p.dispatchEvent(new Event('change', {{ bubbles: true }}));
+        }}
+        var btn = document.querySelector('[data-testid="login-confirm-btn"] button, button[aria-label="Zaloguj się"], button[type="submit"].gds-button--primary');
+        if (!btn) {{
+          var form = l.form || l.closest('form');
+          if (form) {{
+            var candidates = Array.from(form.querySelectorAll('button, input[type="submit"]'));
+            btn = candidates.find(b => {{
+              var t = (b.innerText || b.value || '').toLowerCase();
+              return t.includes('zaloguj') && !t.includes('załóż') && !t.includes('zaloz');
+            }}) || form.querySelector('button[type="submit"], input[type="submit"]');
+          }}
+        }}
+        if (!btn) {{
+          var allBtns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+          btn = allBtns.find(b => {{
+            var t = (b.innerText || b.value || '').toLowerCase();
+            return t.includes('zaloguj') && !t.includes('załóż') && !t.includes('zaloz');
+          }});
+        }}
+        window.__ikw_pz_submitted = true;
+        if (btn) {{
+          btn.click();
+          return JSON.stringify({{ action: 'clicked_button', btn: btn.tagName + (btn.className ? '.' + btn.className : ''), text: (btn.innerText || btn.value || '').trim() }});
+        }} else if (l.form) {{
+          if (typeof l.form.requestSubmit === 'function') {{
+            l.form.requestSubmit();
+          }} else {{
+            l.form.submit();
+          }}
+          return JSON.stringify({{ action: 'form_submit' }});
+        }}
+      }}
+      return null;
     }})()
     """
     try:
-        return cdp_client.evaluate_in_page(host, port, js)
-    except Exception:
+        raw_res = cdp_client.evaluate_in_page(host, port, js)
+        if raw_res:
+            print(f"[PZ-LOGIN LOG] Form handled -> {raw_res}")
+            return True
+        return False
+    except Exception as e:
+        print(f"[PZ-LOGIN LOG] fill_pz_credentials error: {e!r}")
         return False
 
 
@@ -524,42 +710,190 @@ def check_sms_modal_present(host, port):
         return False
 
 
-def fetch_sms_code_from_google_messages(host, port):
-    """Open or switch to Google Messages Web tab and extract the PZePUAP SMS code."""
-    messages_url = "https://messages.google.com/web/conversations/"
-    targets = cdp_client.get_all_targets(host, port)
+_GM_TAB_CREATED = False
+
+
+def fetch_sms_code_info_from_google_messages(host, port):
+    """Scan Google Messages Web for PZePUAP SMS code and return info dict or None."""
+    try:
+        targets = cdp_client.get_all_targets(host, port)
+    except Exception:
+        return None
 
     msg_target = None
     for t in targets:
-        if "messages.google.com" in t.get("url", ""):
+        url = t.get("url", "")
+        title = t.get("title", "")
+        if "messages.google.com" in url or "Google Messages" in title or "Messages" in title:
             msg_target = t
             break
 
-    ws_url = (
-        msg_target["webSocketDebuggerUrl"]
-        if msg_target
-        else cdp_client.create_tab(host, port, messages_url)
-    )
+    if msg_target:
+        ws_url = msg_target.get("webSocketDebuggerUrl")
+    else:
+        return None
 
     js = r"""
     (function() {
-      var items = document.querySelectorAll('a[data-e2e-conversation], mws-text-message-part');
+      function queryDeep(sel, root) {
+        root = root || document;
+        var res = Array.from(root.querySelectorAll(sel));
+        var tw = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
+        while (tw.nextNode()) {
+          var n = tw.currentNode;
+          if (n.shadowRoot) {
+            var sub = queryDeep(sel, n.shadowRoot);
+            for (var i = 0; i < sub.length; i++) res.push(sub[i]);
+          }
+        }
+        return res;
+      }
+
+      var headerTitleEl = queryDeep('[data-e2e-header-title] h2, [data-e2e-header-title], mws-header h2')[0];
+      var headerTitle = (headerTitleEl ? headerTitleEl.innerText : '').trim();
+      var isPzActive = headerTitle.toLowerCase().indexOf('pzepuap') !== -1 || headerTitle.toLowerCase().indexOf('profil zaufany') !== -1;
+
+      // 1. If PZePUAP is not currently active, trigger Angular router navigation or click
+      var convItems = queryDeep('mws-conversation-list-item, a[data-e2e-conversation]');
+      var pzItem = convItems.find(function(el) {
+        var nameEl = el.querySelector('[data-e2e-conversation-name], .name');
+        var name = (nameEl ? nameEl.innerText : el.innerText) || '';
+        return name.toLowerCase().indexOf('pzepuap') !== -1 || name.toLowerCase().indexOf('profil zaufany') !== -1;
+      });
+
+      if (!isPzActive && pzItem) {
+        var target = pzItem.querySelector('a[data-e2e-conversation]') || (pzItem.tagName === 'A' ? pzItem : null);
+        if (target) {
+          var href = target.getAttribute('href');
+          if (href && window.location.pathname !== href) {
+            window.location.href = href;
+          } else {
+            target.scrollIntoView({ block: 'center', behavior: 'instant' });
+            target.click();
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          }
+          return JSON.stringify({ action: 'switching_to_pz', is_pz_active: false });
+        }
+      }
+
+      // 2. Scan both active message pane and sidebar conversation list items (deep Shadow DOM query)
+      var items = queryDeep('mws-message-wrapper, [data-e2e-message-content], mws-conversation-list-item, a[data-e2e-conversation], mws-text-message-part');
+      var matches = [];
+      var seen = {};
       for (var i = 0; i < items.length; i++) {
-        var text = items[i].innerText || items[i].textContent || '';
-        if (text.indexOf('PZePUAP') !== -1 || text.indexOf('Logowanie do profilu zaufanego') !== -1) {
-          var match = text.match(/Kod:\s*(\d{8})/);
-          if (match) {
-            return match[1];
+        var item = items[i];
+        var isPzItem = false;
+        var nameEl = item.querySelector('[data-e2e-conversation-name], .name');
+        if (nameEl) {
+          var name = (nameEl.innerText || nameEl.textContent || '').toLowerCase();
+          if (name.indexOf('pzepuap') !== -1 || name.indexOf('profil zaufany') !== -1) {
+            isPzItem = true;
+          }
+        }
+        var isMessageWrapper = item.tagName === 'MWS-MESSAGE-WRAPPER' || item.hasAttribute('data-e2e-message-content') || item.tagName === 'MWS-TEXT-MESSAGE-PART';
+        
+        if (isPzItem || isMessageWrapper || isPzActive) {
+          var text = item.innerText || item.textContent || '';
+          var m = text.match(/(\d{2}\.\d{2}\.\d{4}),?\s*godz\.\s*(\d{2}:\d{2}:\d{2}).*?Kod:\s*(\d{8})/i);
+          if (m) {
+            var dateParts = m[1].split('.');
+            var timeParts = m[2].split(':');
+            var d = parseInt(dateParts[0], 10);
+            var mo = parseInt(dateParts[1], 10) - 1;
+            var y = parseInt(dateParts[2], 10);
+            var h = parseInt(timeParts[0], 10);
+            var mi = parseInt(timeParts[1], 10);
+            var s = parseInt(timeParts[2], 10);
+            var ts = new Date(y, mo, d, h, mi, s).getTime() / 1000;
+            var key = m[3] + '_' + ts;
+            if (!seen[key]) {
+              seen[key] = true;
+              matches.push({ code: m[3], timestamp: ts, date_str: m[1], time_str: m[2] });
+            }
           }
         }
       }
-      return null;
+
+      if (matches.length > 0) {
+        matches.sort(function(a, b) { return b.timestamp - a.timestamp; });
+        return JSON.stringify(matches[0]);
+      }
+      return JSON.stringify({ debug_items: items.length, is_pz_active: isPzActive, pz_item_found: !!pzItem });
     })()
     """
     try:
-        return cdp_client.evaluate_in_target_ws(ws_url, js)
+        raw_res = cdp_client.evaluate_in_target_ws(ws_url, js)
+        if raw_res:
+            res_dict = json.loads(raw_res)
+            return res_dict
+    except Exception as e:
+        print(f"[PZ-SMS LOG] fetch_sms_code_info error: {e!r}")
+    return None
+
+
+def fetch_sms_code_from_google_messages(host, port, min_timestamp=None):
+    """Open or switch to Google Messages Web tab, ensure PZePUAP conversation is active via header inspection,
+    and extract the latest valid PZePUAP SMS code matching the timestamp condition."""
+    global _GM_TAB_CREATED
+    messages_url = "https://messages.google.com/web"
+    try:
+        targets = cdp_client.get_all_targets(host, port)
     except Exception:
         return None
+
+    msg_target = None
+    for t in targets:
+        url = t.get("url", "")
+        title = t.get("title", "")
+        if "messages.google.com" in url or "Google Messages" in title or "Messages" in title:
+            msg_target = t
+            break
+
+    if not msg_target:
+        if not _GM_TAB_CREATED:
+            _GM_TAB_CREATED = True
+            cdp_client.create_tab(host, port, messages_url)
+        else:
+            return None
+
+    # Focus Google Messages tab to prevent Chromium background tab throttling
+    cdp_client.bring_to_front(host, port, url_pattern="messages.google.com")
+
+    info = fetch_sms_code_info_from_google_messages(host, port)
+    if info:
+        if info.get("action") == "switching_to_pz":
+            print("[PZ-SMS LOG] Switching to PZePUAP conversation in Google Messages tab... Waiting for Angular render.")
+            time.sleep(1.0)
+            info = fetch_sms_code_info_from_google_messages(host, port)
+
+        if info and "code" in info:
+            code = info.get("code")
+            sms_ts = info.get("timestamp", 0)
+            date_str = info.get("date_str", "")
+            time_str = info.get("time_str", "")
+
+            now = time.time()
+            if min_timestamp and sms_ts < (min_timestamp - 30):
+                print(
+                    f"[PZ-SMS LOG] Found SMS code {code} from {date_str} {time_str}, but it is older than login attempt (min ts: {min_timestamp}). Waiting for new SMS..."
+                )
+                return None
+
+            if now - sms_ts > 300:  # Older than 5 minutes overall
+                print(
+                    f"[PZ-SMS LOG] Found SMS code {code} from {date_str} {time_str}, but it is too old ({int(now - sms_ts)}s). Waiting for new SMS..."
+                )
+                return None
+
+            print(
+                f"[PZ-SMS LOG] Fresh SMS code captured: {code} (sent at {date_str} {time_str})"
+            )
+            return code
+        else:
+            print(f"[PZ-SMS LOG] Debug DOM scan -> {info}")
+    return None
 
 
 def inject_sms_code_and_submit(host, port, code):
@@ -651,6 +985,7 @@ def main():
     login_method = config.get("login_method", "mobywatel")
     pz_login = config.get("pz_login", "")
     pz_password = config.get("pz_password", "")
+    dev_mode = bool(config.get("dev_mode", False))
 
     if login_method == "profil_zaufany":
         targets = ["Profil zaufany", "gov.pl", "Zaloguj się"]
@@ -681,48 +1016,48 @@ def main():
 
     chrome_proc = None
     try:
-        chrome = find_chrome()
-        print(f"using browser: {chrome}")
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        chrome_proc = subprocess.Popen(
-            [
-                chrome,
-                f"--remote-debugging-port={args.port}",
-                f"--user-data-dir={PROFILE_DIR}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                # Both 460px and 600px wide clipped the login page below
-                # whatever breakpoint swaps its QR image for a plain numeric
-                # backup code (confirmed live 2026-07-22, twice). There's no
-                # real reason to keep this narrow/phone-ish — it's a login
-                # page in a desktop browser, not a phone screen — so this
-                # goes well past any plausible responsive breakpoint
-                # (common ones sit around 480/600/768px) instead of tuning
-                # the width by trial and error again.
-                "--window-size=900,850",
-                "--app=about:blank",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-
-        notify_desktop(
-            "info-kierowca: relogin needed",
-            "Chrome opened — scan the QR in the app to log back in",
-            "critical",
-        )
-        if not args.no_phone_push:
-            push_ntfy(
-                "info-kierowca: relogin needed",
-                "Chrome opened on your desktop — scan the QR in the app to log back in",
-                priority="default",
+        # Check if Chrome is ALREADY running on debug port
+        if cdp_client.debug_port_open("127.0.0.1", args.port):
+            print(f"Browser already running on port {args.port} — reusing existing window.")
+            cdp_client.bring_to_front("127.0.0.1", args.port)
+            try:
+                cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
+            except Exception:
+                pass
+        else:
+            chrome = find_chrome()
+            print(f"using browser: {chrome}")
+            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            chrome_proc = subprocess.Popen(
+                [
+                    chrome,
+                    f"--remote-debugging-port={args.port}",
+                    f"--user-data-dir={PROFILE_DIR}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--window-size=900,850",
+                    "--app=about:blank",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
 
-        cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
-        # Register the click-observer before the real page ever loads, then
-        # navigate — so it's already watching from the first paint instead
-        # of racing our own next poll tick.
-        cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
+            notify_desktop(
+                "info-kierowca: relogin needed",
+                "Chrome opened — scan the QR in the app to log back in",
+                "critical",
+            )
+            if not args.no_phone_push:
+                push_ntfy(
+                    "info-kierowca: relogin needed",
+                    "Chrome opened on your desktop — scan the QR in the app to log back in",
+                    priority="default",
+                )
+
+            cdp_client.wait_for_debug_port("127.0.0.1", args.port, timeout=20)
+            cdp_client.inject_and_navigate("127.0.0.1", args.port, args.url, observer_js)
+            cdp_client.bring_to_front("127.0.0.1", args.port)
+
         cookies = wait_for_cookies(
             "127.0.0.1",
             args.port,
@@ -732,9 +1067,14 @@ def main():
             pz_login=pz_login,
             pz_password=pz_password,
             targets=targets,
+            dev_mode=dev_mode,
         )
 
         if cookies is None:
+            try:
+                AUTO_REFRESH_COOLDOWN_FILE.write_text(str(time.time()))
+            except Exception:
+                pass
             if chrome_proc.poll() is not None:
                 print("Chrome exited before logging in (crashed or was closed).")
                 notify_desktop(
@@ -751,6 +1091,7 @@ def main():
                 )
             sys.exit(1)
 
+        AUTO_REFRESH_COOLDOWN_FILE.unlink(missing_ok=True)
         cdp_client.write_session_file(cookies)
         print(f"Wrote {len(cookies)} cookie(s) to {cdp_client.SESSION_FILE}")
         notify_desktop(

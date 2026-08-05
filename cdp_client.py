@@ -16,6 +16,7 @@ import json
 import os
 import socket
 import struct
+import sys
 import time
 import urllib.request
 from urllib.parse import quote, urlparse
@@ -117,6 +118,16 @@ def cdp_call(sock, req_id, method, params=None):
         # else: an unrelated event fired in the meantime — keep reading
 
 
+def debug_port_open(host, port):
+    """Return True if Chrome's debug port responds to /json/version."""
+    try:
+        url = f"http://{host}:{port}/json/version"
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def wait_for_debug_port(host, port, timeout=15):
     """Poll /json/version until Chrome's debug port answers, or raise TimeoutError."""
     url = f"http://{host}:{port}/json/version"
@@ -140,16 +151,23 @@ def browser_ws_url(host, port):
         return json.loads(resp.read())["webSocketDebuggerUrl"]
 
 
-def page_ws_url(host, port):
-    """Websocket URL of the first open page/tab, or None if there isn't one.
-
-    Browser-scoped calls (Storage.*) can use browser_ws_url, but Page.* and
-    Runtime.* need a specific page target's own socket.
-    """
-    with urllib.request.urlopen(f"http://{host}:{port}/json", timeout=5) as resp:
-        targets = json.loads(resp.read())
+def page_ws_url(host, port, pattern=None):
+    """Websocket URL of the page/tab matching `pattern` in url/title, or the first page tab if pattern is None/unmatched."""
+    try:
+        targets = get_all_targets(host, port)
+    except Exception:
+        return None
     pages = [t for t in targets if t.get("type") == "page"]
-    return pages[0]["webSocketDebuggerUrl"] if pages else None
+    if not pages:
+        return None
+    if pattern:
+        pattern_lower = pattern.lower()
+        for p in pages:
+            url = p.get("url", "").lower()
+            title = p.get("title", "").lower()
+            if pattern_lower in url or pattern_lower in title:
+                return p.get("webSocketDebuggerUrl")
+    return pages[0].get("webSocketDebuggerUrl")
 
 
 @contextlib.contextmanager
@@ -206,15 +224,9 @@ def navigate(host, port, url):
     inject_and_navigate(host, port, url, script=None)
 
 
-def evaluate_in_page(host, port, expression):
-    """Run a JS expression in the first open page/tab and return its value.
-
-    Unlike fetch_cookies (which talks to the browser-level debugger target,
-    fine for the browser-scoped Storage.getCookies), Runtime.evaluate needs
-    a specific page target's own websocket — so this queries /json for the
-    open tabs first.
-    """
-    ws_url = page_ws_url(host, port)
+def evaluate_in_page(host, port, expression, pattern=None):
+    """Run a JS expression in a page/tab (matching `pattern` if provided) and return its value."""
+    ws_url = page_ws_url(host, port, pattern=pattern)
     if ws_url is None:
         return None
     with cdp_socket(ws_url) as sock:
@@ -231,12 +243,6 @@ def inject_and_navigate(host, port, url, script):
     """Register `script` to run on every future document in the first open
     page/tab, then navigate it to `url`. `script=None` skips the injection
     and just navigates (see navigate()).
-
-    Page.addScriptToEvaluateOnNewDocument runs before any of a document's
-    own scripts — including across cross-origin navigations within the same
-    target — so a script registered here is already watching the DOM from
-    the very first paint of `url` (and every redirect after it), instead of
-    only reacting after our own next poll tick.
     """
     ws_url = page_ws_url(host, port)
     if ws_url is None:
@@ -295,6 +301,61 @@ def evaluate_in_target_ws(ws_url, expression):
             sock,
             1,
             "Runtime.evaluate",
-            {"expression": expression, "returnByValue": True},
+            {"expression": expression, "returnByValue": True, "userGesture": True},
         )
+        if "exceptionDetails" in result:
+            print(f"[CDP LOG] JS Exception in target WS: {result['exceptionDetails']}")
     return result.get("result", {}).get("value")
+
+
+def force_window_foreground():
+    """Use Win32 API to bring Chrome window out of minimized taskbar state into top foreground."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            try:
+                user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+            except Exception:
+                pass
+
+            def enum_cb(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buff = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buff, length + 1)
+                        title = buff.value
+                        if any(
+                            k in title
+                            for k in [
+                                "Chrome",
+                                "gov.pl",
+                                "Profil",
+                                "Google Messages",
+                                "Info-Kierowca",
+                                "Zaloguj",
+                            ]
+                        ):
+                            user32.ShowWindow(hwnd, 9)  # SW_RESTORE / SW_SHOWNORMAL
+                            user32.SetForegroundWindow(hwnd)
+                return True
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+        except Exception:
+            pass
+
+
+def bring_to_front(host, port, url_pattern=None):
+    """Bring the active Chrome window / page target (matching `url_pattern` if given) to the foreground."""
+    try:
+        ws_url = page_ws_url(host, port, pattern=url_pattern)
+        if ws_url:
+            with cdp_socket(ws_url) as sock:
+                cdp_call(sock, 1, "Page.bringToFront")
+    except Exception:
+        pass
+    force_window_foreground()
+

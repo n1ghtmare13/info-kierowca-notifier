@@ -109,6 +109,11 @@ TOOLBAR_HTML = """
       <path d="M19.4 13a7.97 7.97 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a8 8 0 0 0-1.7-1L14.9 3h-4l-.4 2.9a8 8 0 0 0-1.7 1l-2.5-1-2 3.5L6.4 11a7.97 7.97 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a8 8 0 0 0 1.7 1l.4 2.9h4l.4-2.9a8 8 0 0 0 1.7-1l2.5 1 2-3.5z"/>
     </svg>
   </button>
+  <button id="ikw-pause-btn" class="ikw-icon-btn" title="Pause / Resume checking" aria-label="Pause or resume checking">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+    </svg>
+  </button>
   <button id="ikw-quit-btn" class="ikw-icon-btn" title="Quit" aria-label="Quit">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>
@@ -252,6 +257,8 @@ ikwHeadlineWrap.addEventListener('click', ikwTogglePause);
 ikwHeadlineWrap.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); ikwTogglePause(); }
 });
+const ikwPauseBtn = document.getElementById('ikw-pause-btn');
+if (ikwPauseBtn) ikwPauseBtn.addEventListener('click', ikwTogglePause);
 
 const ikwToolbar = document.getElementById('ikw-toolbar');
 const ikwToolbarZone = document.getElementById('ikw-toolbar-zone');
@@ -602,9 +609,20 @@ WIZARD_PAGE = """<!doctype html>
         <div class="reveal">
           <input type="password" id="pz_password" autocomplete="off" placeholder="••••••••">
           <button type="button" class="reveal-btn" id="reveal-pz-pass" aria-label="Show or hide password"></button>
+        <div style="margin-top:0.9rem; display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap;">
+          <button type="button" id="pair-google-messages-btn" style="width:auto; padding:0.55rem 1rem; background:#2f2f2f; color:#eee; border:1px solid #444; border-radius:6px; cursor:pointer; font-weight:500;">Pair Google Messages Web</button>
+          <button type="button" id="test-google-messages-btn" style="width:auto; padding:0.55rem 1rem; background:#1b3d2f; color:#4ade80; border:1px solid #22c55e; border-radius:6px; cursor:pointer; font-weight:500;">Test SMS Extraction</button>
         </div>
-        <div class="hint" style="margin-top:0.4rem;">
-          Requires a one-time pairing of your phone with <a href="https://messages.google.com/web" target="_blank" style="color:var(--accent-soft);">Google Messages Web</a> in the Chrome window so SMS codes can be read automatically.
+        <div class="hint" id="pair-gm-status" style="margin-top:0.4rem;">Click Pair to open Chrome and pair your phone, or Test SMS Extraction to test reading the latest SMS code anytime without logging in.</div>
+
+        <div style="margin-top:1rem; padding:0.6rem 0.8rem; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1); border-radius:6px;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:500; font-size:0.92rem;">Dev Mode: Slow automation (5s delays)</div>
+              <div class="hint" style="margin-top:0.2rem; font-size:0.8rem;">Pauses 5 seconds before each step (form fill, button click, SMS submission) so you can review and close Chrome if needed.</div>
+            </div>
+            <div class="switch" id="dev_mode" role="switch" tabindex="0" aria-checked="false"><div class="knob"></div></div>
+          </div>
         </div>
       </div>
     </fieldset>
@@ -1280,6 +1298,46 @@ document.querySelectorAll('#login-methods .pill').forEach((p) => {
   });
 });
 
+const pairGmBtn = document.getElementById('pair-google-messages-btn');
+const testGmBtn = document.getElementById('test-google-messages-btn');
+const pairGmStatus = document.getElementById('pair-gm-status');
+if (pairGmBtn) {
+  pairGmBtn.addEventListener('click', async () => {
+    pairGmBtn.disabled = true;
+    pairGmStatus.textContent = 'Opening Chrome for Google Messages pairing...';
+    try {
+      const res = await fetch('/pair-google-messages', { method: 'POST' });
+      const data = await res.json();
+      pairGmStatus.textContent = data.ok
+        ? 'Chrome opened! Log in / pair your phone in Chrome and keep it saved.'
+        : (data.error || 'Failed to launch Chrome.');
+    } catch (e) {
+      pairGmStatus.textContent = 'Failed to launch Chrome.';
+    } finally {
+      pairGmBtn.disabled = false;
+    }
+  });
+}
+if (testGmBtn) {
+  testGmBtn.addEventListener('click', async () => {
+    testGmBtn.disabled = true;
+    pairGmStatus.textContent = 'Testing Google Messages SMS extraction...';
+    try {
+      const res = await fetch('/test-google-messages', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        pairGmStatus.innerHTML = `<span style="color:#4ade80; font-weight:600;">SUCCESS: ${data.message}</span>`;
+      } else {
+        pairGmStatus.innerHTML = `<span style="color:#f87171;">${data.error || 'Failed to read SMS.'}</span>`;
+      }
+    } catch (e) {
+      pairGmStatus.innerHTML = `<span style="color:#f87171;">Error testing Google Messages: ${e.message}</span>`;
+    } finally {
+      testGmBtn.disabled = false;
+    }
+  });
+}
+
 renderSelected();
 
 if (EXISTING_CONFIG) {
@@ -1324,6 +1382,7 @@ if (EXISTING_CONFIG) {
   setSwitch(document.getElementById('auto_open_browser'), EXISTING_CONFIG.auto_open_browser !== false);
   setSwitch(autoSelectSlotSwitch, EXISTING_CONFIG.auto_select_slot === true);
   setSwitch(autoConfirmSwitch, EXISTING_CONFIG.auto_confirm_reschedule === true);
+  setSwitch(document.getElementById('dev_mode'), EXISTING_CONFIG.dev_mode === true);
   applyAutoConfirmDim();
   applyNtfyDim();
 
@@ -1429,6 +1488,7 @@ document.getElementById('form').addEventListener('submit', async (e) => {
       auto_open_browser: switchOn('auto_open_browser'),
       auto_select_slot: switchOn('auto_select_slot'),
       auto_confirm_reschedule: switchOn('auto_confirm_reschedule'),
+      dev_mode: switchOn('dev_mode'),
       ntfy_topic: ntfyInput.value,
       login_method: loginMethodHidden.value,
       pz_login: document.getElementById('pz_login').value.trim(),
