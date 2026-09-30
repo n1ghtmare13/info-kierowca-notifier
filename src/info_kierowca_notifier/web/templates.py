@@ -1148,8 +1148,9 @@ autoConfirmSwitch.addEventListener('keydown', (e) => {
 // intervals nobody wants. Must stay within notifier.MIN_POLL_INTERVAL_SECONDS/
 // MAX_POLL_INTERVAL_SECONDS - build_config() validates the submitted value
 // against those independently of this array.
-const POLL_INTERVAL_STEPS = [15, 20, 25, 30, 40, 50, 60, 75, 90, 120, 150, 180, 240, 300, 420, 600, 900, 1200, 1800];
+const POLL_INTERVAL_STEPS = [15, 20, 25, 30, 40, 50, 60, 75, 90, 120, 150, 180, 210, 240, 270, 300, 360, 420, 480, 540, 600, 900, 1200, 1800];
 const pollSlider = document.getElementById('poll_interval_slider');
+pollSlider.max = POLL_INTERVAL_STEPS.length - 1;
 const pollIntervalHidden = document.getElementById('poll_interval_seconds');
 const pollIntervalLabel = document.getElementById('poll-interval-label');
 

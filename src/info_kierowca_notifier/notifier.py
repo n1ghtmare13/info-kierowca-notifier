@@ -537,6 +537,23 @@ def run_check(logger, dash_status):
     if status in (401, 403, 500):
         _handle_auth_expired(logger, dash_status, config, status, "search")
         return
+    if status == 429:
+        retry_after = 3600
+        if _headers:
+            raw_retry = _headers.get("Retry-After")
+            if raw_retry and str(raw_retry).isdigit():
+                retry_after = int(raw_retry)
+            else:
+                raw_reset = _headers.get("X-RateLimit-Reset")
+                if raw_reset and str(raw_reset).isdigit():
+                    diff = int(raw_reset) - int(time.time())
+                    if diff > 0:
+                        retry_after = diff
+
+        logger.info("outcome=rate_limited retry_after=%s", retry_after)
+        mins = round(retry_after / 60)
+        update_status(dash_status, "rate_limited", f"Rate limit reached — will retry in ~{mins} min")
+        return retry_after + 5
     if status != 200:
         # 5xx included: transient upstream errors are not an expired session.
         detail = body[:200].decode(errors="replace") if body else ""
@@ -681,14 +698,17 @@ def loop(logger, dash_status, interval=None, stop_event=None, wake_event=None):
     default_interval = interval or DEFAULT_POLL_INTERVAL_SECONDS
     logger.info("outcome=loop_start interval=%s", default_interval)
     while not stop_event.is_set():
+        wait_override = None
         try:
-            run_check(logger, dash_status)
+            wait_override = run_check(logger, dash_status)
         except Exception:
             logger.exception("outcome=crash stage=run_check")
-        wait_s = jittered_wait(configured_poll_interval(default_interval))
-        # The exact resolved wait (post-jitter) so the dashboard's countdown
-        # can show precisely when the next check will fire instead of
-        # guessing from the base interval alone.
+
+        if wait_override is not None:
+            wait_s = wait_override
+        else:
+            wait_s = jittered_wait(configured_poll_interval(default_interval))
+
         dash_status["next_check_at"] = (datetime.now() + timedelta(seconds=wait_s)).isoformat()
         save_status(dash_status)
         wake_event.clear()

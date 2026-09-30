@@ -346,21 +346,24 @@ def set_cookies(host, port, cookies):
     httpOnly copy is invisible to it and it renders as logged out even
     though the cookie is still sent correctly on every request.
     """
-    cookie_params = [
-        {
+    cookie_params = []
+    for name, value in cookies.items():
+        param = {
             "name": name,
             "value": value,
-            "domain": DOMAIN_SUFFIX,
             "path": "/",
             "secure": True,
             "httpOnly": False,
             "sameSite": "Lax",
         }
-        for name, value in cookies.items()
-    ]
+        if name.startswith("__Host-"):
+            param["url"] = f"https://{DOMAIN_SUFFIX}"
+        else:
+            param["domain"] = DOMAIN_SUFFIX
+        cookie_params.append(param)
+
     with cdp_socket(browser_ws_url(host, port)) as sock:
         cdp_call(sock, 1, "Storage.setCookies", {"cookies": cookie_params})
-
 
 def create_page_target(
     host, port, url="about:blank", *, registration_timeout=1.5,

@@ -138,6 +138,8 @@ LOCALIZATION_SCRIPT = r"""
     'Session expired': 'Sesja wygasła', 'Offline': 'Offline', "Something's wrong": 'Coś poszło nie tak', 'No slots in the next 31 days': 'Brak terminów w ciągu najbliższych 31 dni', 'Waiting for first check…': 'Oczekiwanie na pierwsze sprawdzenie…', 'Checking any moment now…': 'Sprawdzenie nastąpi za chwilę…',
     'Session expired — manual retry required': 'Sesja wygasła — wymagane ręczne ponowienie',
     'Automatic login is paused after repeated failures — open Settings and click "Get new session now."': 'Automatyczne logowanie jest wstrzymane po kilku nieudanych próbach — otwórz Ustawienia i kliknij „Pobierz nową sesję teraz”.',
+    'Rate limit reached': 'Osiągnięto limit zapytań',
+    'Too many requests — cooling down': 'Zbyt wiele zapytań — oczekiwanie na odblokowanie',
   };
   const originals = new WeakMap();
   function lang() { return localStorage.getItem(KEY) === 'pl' ? 'pl' : 'en'; }

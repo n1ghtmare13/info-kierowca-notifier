@@ -234,6 +234,11 @@ async function poll() {
     headline.textContent = ui("Offline");
     subline.textContent = "";
     detail.textContent = data.message ? ui(data.message) : ui("Can't reach info-kierowca.pl — will retry");
+  } else if (data.outcome === "rate_limited") {
+    body.className = "none";
+    headline.textContent = ui("Rate limit reached");
+    subline.textContent = "";
+    detail.textContent = data.message ? ui(data.message) : ui("Too many requests — cooling down");
   } else if (data.outcome === "unexpected" || data.outcome === "unparseable") {
     body.className = "error";
     headline.textContent = ui("Something's wrong");
