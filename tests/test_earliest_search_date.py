@@ -85,7 +85,14 @@ class SearchStartDateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_file, session_file = root / "config.json", root / "session.json"
-            config = app.build_config(payload(search_start_date="2026-08-20"))
+            
+            # Podmieniamy zegar na 2026-08-09 przy tworzeniu konfiguracji,
+            # aby data 2026-08-20 zmieściła się w 31-dniowym limicie testu:
+            with patch("info_kierowca_notifier.app.datetime") as mocked_datetime:
+                mocked_datetime.now.return_value.date.return_value = date(2026, 8, 9)
+                mocked_datetime.fromisoformat.side_effect = __import__("datetime").datetime.fromisoformat
+                config = app.build_config(payload(search_start_date="2026-08-20"))
+
             config_file.write_text(json.dumps(config))
             session_file.write_text(json.dumps({"cookies": {}}))
             calls = []
