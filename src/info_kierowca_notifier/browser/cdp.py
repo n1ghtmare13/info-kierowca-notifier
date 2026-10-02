@@ -348,18 +348,26 @@ def set_cookies(host, port, cookies):
     """
     cookie_params = []
     for name, value in cookies.items():
-        param = {
-            "name": name,
-            "value": value,
-            "path": "/",
-            "secure": True,
-            "httpOnly": False,
-            "sameSite": "Lax",
-        }
         if name.startswith("__Host-"):
-            param["url"] = f"https://{DOMAIN_SUFFIX}"
+            param = {
+                "name": name,
+                "value": str(value),
+                "url": f"https://{DOMAIN_SUFFIX}/",
+                "path": "/",
+                "secure": True,
+                "httpOnly": False,
+                "sameSite": "Lax",
+            }
         else:
-            param["domain"] = DOMAIN_SUFFIX
+            param = {
+                "name": name,
+                "value": str(value),
+                "domain": f".{DOMAIN_SUFFIX}",
+                "path": "/",
+                "secure": name.startswith("__Secure-"),
+                "httpOnly": False,
+                "sameSite": "Lax",
+            }
         cookie_params.append(param)
 
     with cdp_socket(browser_ws_url(host, port)) as sock:
