@@ -48,7 +48,7 @@ PROFILE_DIR = STATE_DIR / "chrome-reschedule-profile"
 # Distinct from pull_session_cookies.py's manual default (9222) and
 # auth.session's (9333) so none of the three ever fight over a
 # port if run at the same time.
-DEFAULT_PORT = 9555
+DEFAULT_PORT = 9335
 DEFAULT_URL = "https://info-kierowca.pl/cases"
 
 
