@@ -355,7 +355,7 @@ def set_cookies(host, port, cookies):
                 "url": f"https://{DOMAIN_SUFFIX}/",
                 "path": "/",
                 "secure": True,
-                "httpOnly": False,
+                "httpOnly": True,
                 "sameSite": "Lax",
             }
         else:
