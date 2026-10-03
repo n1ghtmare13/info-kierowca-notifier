@@ -546,7 +546,7 @@ def run_check(logger, dash_status):
         return
 
     # below applies it again in case the endpoint returns an older slot.
-    global _NEXT_ENDPOINT, _ENDPOINT_STATE
+    global _NEXT_ENDPOINT
     now = datetime.now()
     now_epoch = time.time()
     lower_date = search_start_date(config.get("search_start_date"), today=now.date())
