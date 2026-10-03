@@ -1,0 +1,154 @@
+[1mdiff --git a/src/info_kierowca_notifier/client.py b/src/info_kierowca_notifier/client.py[m
+[1mindex 1d10c87..7121ee5 100644[m
+[1m--- a/src/info_kierowca_notifier/client.py[m
+[1m+++ b/src/info_kierowca_notifier/client.py[m
+[36m@@ -9,6 +9,7 @@[m [mfrom info_kierowca_notifier import tls_transport[m
+ BASE = "https://info-kierowca.pl"[m
+ REFRESH_URL = f"{BASE}/bknd/auth/api/v1/jwt/refresh"[m
+ SEARCH_URL = f"{BASE}/bknd/exam/api/v1/Schedules/user/MultipleCentersExams"[m
+[32m+[m[32mONE_CENTER_SEARCH_URL = f"{BASE}/bknd/exam/api/v1/Schedules/user/OneCenterExam"[m
+ # Traced from the site's own main-*.js (pkkProfilesResource(), used by its[m
+ # "check documents"/reservation forms to resolve a PKK number to a license[m
+ # category) — used by the app module's setup wizard to prefill the PKK number and[m
+[1mdiff --git a/src/info_kierowca_notifier/notifier.py b/src/info_kierowca_notifier/notifier.py[m
+[1mindex 4e18532..aaa7ddd 100644[m
+[1m--- a/src/info_kierowca_notifier/notifier.py[m
+[1m+++ b/src/info_kierowca_notifier/notifier.py[m
+[36m@@ -402,6 +402,42 @@[m [mdef should_proactively_relogin(config, captured_at, *, now=None):[m
+     remaining = expires_at - now[m
+     return 0 < remaining <= PZ_PROACTIVE_RELOGIN_LEAD_SECONDS[m
+ [m
+[32m+[m[32m_ENDPOINT_STATE = {[m
+[32m+[m[32m    "multi": {"remaining": 10, "reset_at": 0},[m
+[32m+[m[32m    "single": {"remaining": 10, "reset_at": 0},[m
+[32m+[m[32m}[m
+[32m+[m[32m_NEXT_ENDPOINT = "multi"[m
+[32m+[m
+[32m+[m
+[32m+[m[32mdef normalize_search_results(data, default_org_id=None):[m
+[32m+[m[32m    """Zapewnia jednolity format danych niezależnie od tego,[m
+[32m+[m[32m    czy odpowiedź pochodzi z OneCenterExam, czy MultipleCentersExams.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    if isinstance(data, list):[m
+[32m+[m[32m        return data[m
+[32m+[m[32m    if not isinstance(data, dict):[m
+[32m+[m[32m        return [][m
+[32m+[m
+[32m+[m[32m    flat_exams = [][m
+[32m+[m[32m    word_id = default_org_id[m
+[32m+[m[32m    word_name = ""[m
+[32m+[m
+[32m+[m[32m    for day in data.get("examCollectionForDay", []):[m
+[32m+[m[32m        for exam in day.get("examCollections", []):[m
+[32m+[m[32m            if not word_id and exam.get("organizationId"):[m
+[32m+[m[32m                word_id = exam.get("organizationId")[m
+[32m+[m[32m            if not word_name and exam.get("organizationName"):[m
+[32m+[m[32m                word_name = exam.get("organizationName")[m
+[32m+[m[32m            flat_exams.append(exam)[m
+[32m+[m
+[32m+[m[32m    if word_id is None:[m
+[32m+[m[32m        return [][m
+[32m+[m
+[32m+[m[32m    return [{[m
+[32m+[m[32m        "wordId": word_id,[m
+[32m+[m[32m        "wordName": word_name,[m
+[32m+[m[32m        "examCollectionForDay": flat_exams,[m
+[32m+[m[32m    }][m
+ [m
+ def run_check(logger, dash_status):[m
+     """Note: pausing/resuming itself is applied instantly by the app module's[m
+[36m@@ -509,32 +545,61 @@[m [mdef run_check(logger, dash_status):[m
+         update_status(dash_status, "unexpected", f"Refresh call returned {status}")[m
+         return[m
+ [m
+[31m-    # 2. Search for slots. The API gets this lower bound, and the local filter[m
+     # below applies it again in case the endpoint returns an older slot.[m
+[32m+[m[32m    global _NEXT_ENDPOINT, _ENDPOINT_STATE[m
+     now = datetime.now()[m
+[32m+[m[32m    now_epoch = time.time()[m
+     lower_date = search_start_date(config.get("search_start_date"), today=now.date())[m
+[32m+[m
+[32m+[m[32m    if now_epoch >= _ENDPOINT_STATE["single"]["reset_at"]:[m
+[32m+[m[32m        _ENDPOINT_STATE["single"]["remaining"] = 10[m
+[32m+[m[32m    if now_epoch >= _ENDPOINT_STATE["multi"]["reset_at"]:[m
+[32m+[m[32m        _ENDPOINT_STATE["multi"]["remaining"] = 10[m
+[32m+[m
+[32m+[m[32m    can_use_single = _ENDPOINT_STATE["single"]["remaining"] > 3[m
+[32m+[m[32m    can_use_multi = _ENDPOINT_STATE["multi"]["remaining"] > 0[m
+[32m+[m
+[32m+[m[32m    mode = _NEXT_ENDPOINT[m
+[32m+[m[32m    if mode == "single" and not can_use_single and can_use_multi:[m
+[32m+[m[32m        mode = "multi"[m
+[32m+[m[32m    elif mode == "multi" and not can_use_multi and can_use_single:[m
+[32m+[m[32m        mode = "single"[m
+[32m+[m
+[32m+[m[32m    primary_org_id = config["organization_ids"][0][m
+[32m+[m[32m    if mode == "single":[m
+[32m+[m[32m        search_url = client.ONE_CENTER_SEARCH_URL[m
+[32m+[m[32m        org_ids_payload = [primary_org_id][m
+[32m+[m[32m        _NEXT_ENDPOINT = "multi"[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        search_url = client.SEARCH_URL[m
+[32m+[m[32m        org_ids_payload = build_search_organization_ids(config)[m
+[32m+[m[32m        _NEXT_ENDPOINT = "single"[m
+[32m+[m
+     payload = {[m
+         "startDate": lower_date.isoformat(),[m
+[31m-        "organizationId": build_search_organization_ids(config),[m
+[32m+[m[32m        "organizationId": org_ids_payload,[m
+         "category": config["category"],[m
+         "profileNumber": config["profile_number"],[m
+         "profileType": "Pkk",[m
+     }[m
+     status, body, _headers = client.do_request([m
+[31m-        client.SEARCH_URL, session, method="POST", json_body=payload[m
+[32m+[m[32m        search_url, session, method="POST", json_body=payload[m
+     )[m
+ [m
+[32m+[m[32m    if _headers:[m
+[32m+[m[32m        rem = _headers.get("X-RateLimit-Remaining") or _headers.get("x-ratelimit-remaining")[m
+[32m+[m[32m        reset = _headers.get("X-RateLimit-Reset") or _headers.get("x-ratelimit-reset")[m
+[32m+[m[32m        if rem and str(rem).isdigit():[m
+[32m+[m[32m            _ENDPOINT_STATE[mode]["remaining"] = int(rem)[m
+[32m+[m[32m        if reset and str(reset).isdigit():[m
+[32m+[m[32m            _ENDPOINT_STATE[mode]["reset_at"] = int(reset)[m
+[32m+[m
+     if status is None:[m
+[31m-        # Never reached the server — see the matching branch in the refresh[m
+[31m-        # stage above. Log and retry next tick rather than alerting.[m
+         detail = body[:200].decode(errors="replace") if body else ""[m
+         logger.info("outcome=network_error stage=search detail=%r", detail)[m
+         update_status(dash_status, "network_error", "Can't reach info-kierowca.pl — will retry")[m
+         return[m
+[31m-    # 500 is in the auth set here too (see the refresh stage above): a 500[m
+[31m-    # from the search endpoint has in practice always turned out to be the[m
+[31m-    # same underlying cookie expiry. See docs/ADVANCED.md's auto-relogin note.[m
+[31m-    if status in (401, 403, 500):[m
+[32m+[m[32m    if status in (401, 403):[m
+         _handle_auth_expired(logger, dash_status, config, status, "search")[m
+         return[m
+     if status == 429:[m
+[36m@@ -550,19 +615,19 @@[m [mdef run_check(logger, dash_status):[m
+                     if diff > 0:[m
+                         retry_after = diff[m
+ [m
+[31m-        logger.info("outcome=rate_limited retry_after=%s", retry_after)[m
+[32m+[m[32m        logger.info("outcome=rate_limited retry_after=%s mode=%s", retry_after, mode)[m
+         mins = round(retry_after / 60)[m
+         update_status(dash_status, "rate_limited", f"Rate limit reached — will retry in ~{mins} min")[m
+         return retry_after + 5[m
+     if status != 200:[m
+[31m-        # 5xx included: transient upstream errors are not an expired session.[m
+         detail = body[:200].decode(errors="replace") if body else ""[m
+[31m-        logger.info("outcome=unexpected status=%s stage=search detail=%r", status, detail)[m
+[32m+[m[32m        logger.info("outcome=unexpected status=%s stage=search detail=%r mode=%s", status, detail, mode)[m
+         update_status(dash_status, "unexpected", f"Search call returned {status}")[m
+         return[m
+ [m
+     try:[m
+[31m-        results = json.loads(body)[m
+[32m+[m[32m        raw_results = json.loads(body)[m
+[32m+[m[32m        results = normalize_search_results(raw_results, default_org_id=primary_org_id)[m
+         assert isinstance(results, list)[m
+     except Exception:[m
+         detail = body[:200].decode(errors="replace") if body else ""[m

@@ -402,6 +402,42 @@ def should_proactively_relogin(config, captured_at, *, now=None):
     remaining = expires_at - now
     return 0 < remaining <= PZ_PROACTIVE_RELOGIN_LEAD_SECONDS
 
+_ENDPOINT_STATE = {
+    "multi": {"remaining": 10, "reset_at": 0},
+    "single": {"remaining": 10, "reset_at": 0},
+}
+_NEXT_ENDPOINT = "multi"
+
+
+def normalize_search_results(data, default_org_id=None):
+    """Zapewnia jednolity format danych niezależnie od tego,
+    czy odpowiedź pochodzi z OneCenterExam, czy MultipleCentersExams.
+    """
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+
+    flat_exams = []
+    word_id = default_org_id
+    word_name = ""
+
+    for day in data.get("examCollectionForDay", []):
+        for exam in day.get("examCollections", []):
+            if not word_id and exam.get("organizationId"):
+                word_id = exam.get("organizationId")
+            if not word_name and exam.get("organizationName"):
+                word_name = exam.get("organizationName")
+            flat_exams.append(exam)
+
+    if word_id is None:
+        return []
+
+    return [{
+        "wordId": word_id,
+        "wordName": word_name,
+        "examCollectionForDay": flat_exams,
+    }]
 
 def run_check(logger, dash_status):
     """Note: pausing/resuming itself is applied instantly by the app module's
@@ -509,32 +545,61 @@ def run_check(logger, dash_status):
         update_status(dash_status, "unexpected", f"Refresh call returned {status}")
         return
 
-    # 2. Search for slots. The API gets this lower bound, and the local filter
     # below applies it again in case the endpoint returns an older slot.
+    global _NEXT_ENDPOINT, _ENDPOINT_STATE
     now = datetime.now()
+    now_epoch = time.time()
     lower_date = search_start_date(config.get("search_start_date"), today=now.date())
+
+    if now_epoch >= _ENDPOINT_STATE["single"]["reset_at"]:
+        _ENDPOINT_STATE["single"]["remaining"] = 10
+    if now_epoch >= _ENDPOINT_STATE["multi"]["reset_at"]:
+        _ENDPOINT_STATE["multi"]["remaining"] = 10
+
+    can_use_single = _ENDPOINT_STATE["single"]["remaining"] > 3
+    can_use_multi = _ENDPOINT_STATE["multi"]["remaining"] > 0
+
+    mode = _NEXT_ENDPOINT
+    if mode == "single" and not can_use_single and can_use_multi:
+        mode = "multi"
+    elif mode == "multi" and not can_use_multi and can_use_single:
+        mode = "single"
+
+    primary_org_id = config["organization_ids"][0]
+    if mode == "single":
+        search_url = client.ONE_CENTER_SEARCH_URL
+        org_ids_payload = [primary_org_id]
+        _NEXT_ENDPOINT = "multi"
+    else:
+        search_url = client.SEARCH_URL
+        org_ids_payload = build_search_organization_ids(config)
+        _NEXT_ENDPOINT = "single"
+
     payload = {
         "startDate": lower_date.isoformat(),
-        "organizationId": build_search_organization_ids(config),
+        "organizationId": org_ids_payload,
         "category": config["category"],
         "profileNumber": config["profile_number"],
         "profileType": "Pkk",
     }
     status, body, _headers = client.do_request(
-        client.SEARCH_URL, session, method="POST", json_body=payload
+        search_url, session, method="POST", json_body=payload
     )
 
+    if _headers:
+        rem = _headers.get("X-RateLimit-Remaining") or _headers.get("x-ratelimit-remaining")
+        reset = _headers.get("X-RateLimit-Reset") or _headers.get("x-ratelimit-reset")
+        if rem and str(rem).isdigit():
+            _ENDPOINT_STATE[mode]["remaining"] = int(rem)
+        if reset and str(reset).isdigit():
+            _ENDPOINT_STATE[mode]["reset_at"] = int(reset)
+
     if status is None:
-        # Never reached the server — see the matching branch in the refresh
-        # stage above. Log and retry next tick rather than alerting.
         detail = body[:200].decode(errors="replace") if body else ""
         logger.info("outcome=network_error stage=search detail=%r", detail)
         update_status(dash_status, "network_error", "Can't reach info-kierowca.pl — will retry")
         return
-    # 500 is in the auth set here too (see the refresh stage above): a 500
-    # from the search endpoint has in practice always turned out to be the
-    # same underlying cookie expiry. See docs/ADVANCED.md's auto-relogin note.
-    if status in (401, 403, 500):
+    if status in (401, 403):
         _handle_auth_expired(logger, dash_status, config, status, "search")
         return
     if status == 429:
@@ -550,19 +615,19 @@ def run_check(logger, dash_status):
                     if diff > 0:
                         retry_after = diff
 
-        logger.info("outcome=rate_limited retry_after=%s", retry_after)
+        logger.info("outcome=rate_limited retry_after=%s mode=%s", retry_after, mode)
         mins = round(retry_after / 60)
         update_status(dash_status, "rate_limited", f"Rate limit reached — will retry in ~{mins} min")
         return retry_after + 5
     if status != 200:
-        # 5xx included: transient upstream errors are not an expired session.
         detail = body[:200].decode(errors="replace") if body else ""
-        logger.info("outcome=unexpected status=%s stage=search detail=%r", status, detail)
+        logger.info("outcome=unexpected status=%s stage=search detail=%r mode=%s", status, detail, mode)
         update_status(dash_status, "unexpected", f"Search call returned {status}")
         return
 
     try:
-        results = json.loads(body)
+        raw_results = json.loads(body)
+        results = normalize_search_results(raw_results, default_org_id=primary_org_id)
         assert isinstance(results, list)
     except Exception:
         detail = body[:200].decode(errors="replace") if body else ""

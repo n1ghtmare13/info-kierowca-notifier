@@ -9,6 +9,7 @@ from info_kierowca_notifier import tls_transport
 BASE = "https://info-kierowca.pl"
 REFRESH_URL = f"{BASE}/bknd/auth/api/v1/jwt/refresh"
 SEARCH_URL = f"{BASE}/bknd/exam/api/v1/Schedules/user/MultipleCentersExams"
+ONE_CENTER_SEARCH_URL = f"{BASE}/bknd/exam/api/v1/Schedules/user/OneCenterExam"
 # Traced from the site's own main-*.js (pkkProfilesResource(), used by its
 # "check documents"/reservation forms to resolve a PKK number to a license
 # category) — used by the app module's setup wizard to prefill the PKK number and
